@@ -460,6 +460,28 @@ class PhonemeLipSyncService {
             });
         }
         
+        // Ensure the last phoneme doesn't extend beyond the total audio duration
+        if (timedPhonemes.length > 0) {
+            const lastPhoneme = timedPhonemes[timedPhonemes.length - 1];
+            if (lastPhoneme.endTime > totalDuration) {
+                // Adjust the end time of the last phoneme to match the audio duration
+                lastPhoneme.endTime = totalDuration;
+                console.log('Adjusted last phoneme end time to match audio duration:', totalDuration);
+            }
+            
+            // If there's still a gap at the end, add a silent viseme to fill it
+            if (lastPhoneme.endTime < totalDuration) {
+                timedPhonemes.push({
+                    phoneme: 'sil',
+                    viseme: 'viseme_sil',
+                    startTime: lastPhoneme.endTime,
+                    endTime: totalDuration,
+                    duration: totalDuration - lastPhoneme.endTime
+                });
+                console.log('Added final silent viseme to fill gap');
+            }
+        }
+        
         return timedPhonemes;
     }
 

@@ -705,6 +705,11 @@ class FacialAnimationSystem {
         this.clock = new THREE.Clock();
         this.modelLoader = new ModelLoader();
         
+        // Transition state for smooth lip sync ending
+        this.transitionToRestingFace = false;
+        this.transitionStartTime = null;
+        this.morphStartState = null;
+        
         // Bind methods
         this.updateMorphTargets = this.updateMorphTargets.bind(this);
         
@@ -746,10 +751,261 @@ class FacialAnimationSystem {
             // Skip creating default animation which might affect appearance
             console.log('Using original model animation only');
             
+            // Load the room model and position character within it
+            this.loadRoomModel(model);
+            
             return model;
         } catch (error) {
             console.error('Failed to load facial model:', error);
         }
+    }
+
+    async loadRoomModel(characterModel) {
+        try {
+            console.log('Loading room model...');
+            const loader = new GLTFLoader();
+            
+            // Load the room model
+            const roomGltf = await new Promise((resolve, reject) => {
+                loader.load('/assets/models/room.glb', resolve, undefined, reject);
+            });
+            
+            const roomModel = roomGltf.scene;
+            
+            // Enable shadows on the room
+            roomModel.traverse(node => {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                    
+                    // Improve material quality
+                    if (node.material) {
+                        node.material.side = THREE.FrontSide;
+                        node.material.needsUpdate = true;
+                    }
+                }
+            });
+            
+            // Add room to scene
+            this.scene.add(roomModel);
+            console.log('Room model added to scene');
+            
+            // Get the room's bounding box for measurements
+            const roomBounds = new THREE.Box3().setFromObject(roomModel);
+            const roomSize = new THREE.Vector3();
+            roomBounds.getSize(roomSize);
+            const roomCenter = new THREE.Vector3();
+            roomBounds.getCenter(roomCenter);
+            
+            console.log('Room dimensions:', roomSize, 'Center:', roomCenter);
+            
+            // Get the floor Y position - use the minimum Y of the room bounds
+            const floorY = roomBounds.min.y;
+            console.log('Floor Y position (from bounds):', floorY);
+            
+            // Find the floor in the room model for more precise positioning
+            let floorMesh = null;
+            roomModel.traverse(node => {
+                // Look for common floor naming or large horizontal surfaces
+                if (node.isMesh && 
+                   (node.name.toLowerCase().includes('floor') || 
+                    node.name.toLowerCase().includes('ground'))) {
+                    floorMesh = node;
+                }
+            });
+            
+            // Get character's bounding box to measure its dimensions
+            const characterBounds = new THREE.Box3().setFromObject(characterModel);
+            const characterSize = new THREE.Vector3();
+            characterBounds.getSize(characterSize);
+            const characterHeight = characterSize.y;
+            
+            console.log('Character height:', characterHeight);
+            
+            // Calculate the position offset needed to place feet on floor
+            const feetOffset = characterBounds.min.y - characterModel.position.y;
+            console.log('Character feet offset:', feetOffset);
+            
+            // Position character in the room
+            characterModel.position.set(
+                roomCenter.x, // Center horizontally
+                floorY - feetOffset + 0.85, // Place feet exactly on the floor with small offset to prevent clipping
+                roomCenter.z // Center depth-wise
+            );
+            
+            // If the character height is too small compared to the room (less than 60% of room height)
+            // scale it up to make it more visible and proportional to the room
+            const scaleRatio = roomSize.y / characterHeight;
+            
+            if (scaleRatio > 3) {
+                // Scale up the character to a more visible size
+                const newScale = 1.8; // Increase scale more for better visibility
+                characterModel.scale.set(newScale, newScale, newScale);
+                console.log('Character scaled up by factor of', newScale);
+                
+                // Recalculate bounding box after scaling
+                const newBounds = new THREE.Box3().setFromObject(characterModel);
+                const newFeetOffset = newBounds.min.y - characterModel.position.y;
+                
+                // Adjust position again after scaling to ensure feet are on floor
+                characterModel.position.y = floorY - newFeetOffset + 0.85; // Small offset to prevent z-fighting
+            }
+            
+            console.log('Character positioned at:', characterModel.position);
+            
+            // Make sure character casts shadows
+            characterModel.traverse(node => {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    
+                    // Make sure materials render properly
+                    if (node.material) {
+                        node.material.needsUpdate = true;
+                    }
+                }
+            });
+            
+            // Make sure the entire character is visible
+            // Position camera to show full body
+            this.adjustCameraForFullBodyView(characterModel, roomBounds);
+            
+            // Update room lighting to match the environment
+            this.updateLightingForRoom(roomModel);
+            
+            return roomModel;
+        } catch (error) {
+            console.error('Failed to load room model:', error);
+        }
+    }
+    
+    adjustCameraForFullBodyView(characterModel, roomBounds) {
+        // Calculate the character's bounding box
+        const characterBounds = new THREE.Box3().setFromObject(characterModel);
+        const characterSize = new THREE.Vector3();
+        characterBounds.getSize(characterSize);
+        const characterCenter = new THREE.Vector3();
+        characterBounds.getCenter(characterCenter);
+        
+        // Position camera to view the full character body
+        const distanceToShowFullBody = characterSize.y * 2.0; // Increased for better view
+        const heightOffset = characterSize.y * 0.4; // Look at the upper body
+        
+        // Position camera to look at character from an angle
+        this.camera.position.set(
+            characterCenter.x + distanceToShowFullBody * 0.7,
+            characterCenter.y + heightOffset,
+            characterCenter.z + distanceToShowFullBody * 0.7
+        );
+        
+        // Point camera at character's upper body
+        const lookAtPoint = new THREE.Vector3(
+            characterCenter.x,
+            characterCenter.y + (characterSize.y * 0.2), // Look at upper body
+            characterCenter.z
+        );
+        this.camera.lookAt(lookAtPoint);
+        
+        // Update orbit controls to target the character
+        this.controls.target.copy(lookAtPoint);
+        
+        // Adjust control limits to prevent going through the floor or too far away
+        this.controls.minDistance = characterSize.y * 1.0;
+        this.controls.maxDistance = characterSize.y * 5.0;
+        this.controls.update();
+        
+        console.log('Camera adjusted for full body view');
+    }
+    
+    updateLightingForRoom(roomModel) {
+        // Remove existing lights
+        this.scene.children.forEach(child => {
+            if (child.isLight && !(child instanceof THREE.AmbientLight)) {
+                this.scene.remove(child);
+            }
+        });
+        
+        // Create new lighting setup appropriate for indoor scene
+        
+        // Keep ambient light but adjust intensity
+        const ambientLight = this.scene.children.find(child => child instanceof THREE.AmbientLight);
+        if (ambientLight) {
+            ambientLight.intensity = 0.5; // Keep this lower to not brighten the room too much
+        }
+        
+        // Create main directional light (window light)
+        const mainLight = new THREE.DirectionalLight(0xffffff, 0.8); // Standard room lighting
+        mainLight.position.set(10, 8, 5);
+        mainLight.castShadow = true;
+        
+        // Better shadow settings
+        mainLight.shadow.mapSize.width = 2048;
+        mainLight.shadow.mapSize.height = 2048;
+        mainLight.shadow.camera.near = 0.5;
+        mainLight.shadow.camera.far = 50;
+        mainLight.shadow.bias = -0.0001;
+        
+        // Adjust shadow camera to cover the room
+        const shadowSize = 10;
+        mainLight.shadow.camera.left = -shadowSize;
+        mainLight.shadow.camera.right = shadowSize;
+        mainLight.shadow.camera.top = shadowSize;
+        mainLight.shadow.camera.bottom = -shadowSize;
+        
+        this.scene.add(mainLight);
+        
+        // Add some soft fill lights for the room
+        const fillLight1 = new THREE.PointLight(0xffffff, 0.4); // Keep the room lighting standard
+        fillLight1.position.set(-5, 5, -5);
+        this.scene.add(fillLight1);
+        
+        const fillLight2 = new THREE.PointLight(0xffffff, 0.2); // Keep the room lighting standard
+        fillLight2.position.set(5, 2, -5);
+        this.scene.add(fillLight2);
+        
+        // ======= CHARACTER-SPECIFIC LIGHTING - ENHANCED FOR BRIGHTNESS =======
+        
+        // Primary character spotlight - significantly brighter
+        const characterSpotlight = new THREE.SpotLight(0xffffff, 1.5); // Increased intensity
+        characterSpotlight.position.set(0, 8, 5);
+        characterSpotlight.angle = Math.PI / 6;
+        characterSpotlight.penumbra = 0.5;
+        characterSpotlight.decay = 1.0; // Reduced decay for brighter illumination
+        characterSpotlight.distance = 20;
+        characterSpotlight.target.position.set(0, 1.5, 0); // Aim at character's upper body
+        
+        // Only make the character receive this light by using layers
+        characterSpotlight.castShadow = true;
+        characterSpotlight.shadow.bias = -0.002; // Adjust shadow bias
+        
+        this.scene.add(characterSpotlight);
+        this.scene.add(characterSpotlight.target);
+        
+        // Add secondary front light for the character
+        const characterFrontLight = new THREE.SpotLight(0xffffff, 1.2);
+        characterFrontLight.position.set(0, 1.8, 8); // Position in front
+        characterFrontLight.angle = Math.PI / 8;
+        characterFrontLight.penumbra = 0.7;
+        characterFrontLight.decay = 1.0;
+        characterFrontLight.distance = 15;
+        characterFrontLight.target.position.set(0, 1.5, 0);
+        this.scene.add(characterFrontLight);
+        this.scene.add(characterFrontLight.target);
+        
+        // Add fill light from below to remove any harsh shadows
+        const characterFillLight = new THREE.PointLight(0xfffff0, 0.7); // Slight warm tint
+        characterFillLight.position.set(0, 0.8, 4);
+        characterFillLight.distance = 8;
+        characterFillLight.decay = 1.5;
+        this.scene.add(characterFillLight);
+        
+        // Enable renderer shadows if they weren't already
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        
+        // Tone mapping for the overall scene - keep at moderate level
+        this.renderer.toneMappingExposure = 1.2; 
+        
+        console.log('Room lighting updated with enhanced character-specific illumination');
     }
 
     initializeMorphTargets() {
@@ -788,17 +1044,22 @@ class FacialAnimationSystem {
         this.camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer({ 
             antialias: true,
-            alpha: true,
+            alpha: false, // No transparent background when using room
             preserveDrawingBuffer: true 
         });
         
         // Enable VR with specific XR features
         this.renderer.xr.enabled = true;
         
+        // Enable shadows and higher quality rendering
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        
         // Enable tone mapping and correct color space
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1;
+        this.renderer.toneMappingExposure = 1.2; // Slightly brighter for indoor scene
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        this.renderer.setPixelRatio(window.devicePixelRatio);
         
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         container.appendChild(this.renderer.domElement);
@@ -898,9 +1159,9 @@ class FacialAnimationSystem {
         this.camera.lookAt(0, 1.6, 0);
 
         // Set up the scene environment
-        this.scene.background = new THREE.Color(0x1a1a1a);
+        this.scene.background = new THREE.Color(0x1a1a1a); // This will be overridden when the room is loaded
 
-        // Standard lighting setup for realistic renderings of human figures
+        // Standard lighting setup - this will be replaced by the room-specific lighting
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
         this.scene.add(ambientLight);
 
@@ -909,6 +1170,14 @@ class FacialAnimationSystem {
         keyLight.position.set(0, 1.8, 2.5);
         keyLight.target.position.set(0, 1.6, 0);
         keyLight.castShadow = true;
+        
+        // Set up shadow properties for the key light
+        keyLight.shadow.mapSize.width = 2048;
+        keyLight.shadow.mapSize.height = 2048;
+        keyLight.shadow.camera.near = 0.5;
+        keyLight.shadow.camera.far = 20;
+        keyLight.shadow.bias = -0.0001;
+        
         this.scene.add(keyLight);
         this.scene.add(keyLight.target);
 
@@ -928,7 +1197,7 @@ class FacialAnimationSystem {
         this.controls.dampingFactor = 0.05;
         this.controls.rotateSpeed = 0.5;
         this.controls.minDistance = 1.0;
-        this.controls.maxDistance = 5.0;
+        this.controls.maxDistance = 20.0; // Increased to allow viewing entire room
         
         // Set orbit target to match the model's head position
         this.controls.target.set(0, 1.6, 0);
@@ -962,9 +1231,19 @@ class FacialAnimationSystem {
                     this.controls.update();
                 }
                 
-                // Update morph targets only when needed for lip sync
-                if (this.isAudioPlaying) {
-                    this.updateMorphTargets();
+                // Update morph targets based on animation state
+                if (this.morphTargetMesh) {
+                    if (this.isAudioPlaying) {
+                        this.updateMorphTargets();
+                    } else if (this.transitionToRestingFace) {
+                        // Apply transition to resting face
+                        this.applyRestingFaceTransition();
+                    } else {
+                        // Ensure morphs are zeroed out
+                        this.morphTargetMesh.morphTargetInfluences.fill(0);
+                        // Apply eye movements in non-speaking state
+                        this.applyEyeMovements();
+                    }
                 }
                 
                 // Render scene
@@ -978,9 +1257,14 @@ class FacialAnimationSystem {
     updateMorphTargets() {
         if (!this.morphTargetMesh) return;
 
-        // When not speaking, keep all morph targets at 0 to preserve original model
-        if (!this.isAudioPlaying) {
-            this.morphTargetMesh.morphTargetInfluences.fill(0);
+        // When not speaking, ensure morph targets are reset
+        if (!this.isAudioPlaying || !this.currentVisemeTimeline) {
+            // This is a safety check - if we're not speaking but the method was called,
+            // ensure all morphs are zeroed out and start transition if needed
+            if (!this.transitionToRestingFace) {
+                this.transitionToRestingFace = true;
+                this.transitionStartTime = null;
+            }
             return;
         }
 
@@ -990,10 +1274,8 @@ class FacialAnimationSystem {
         // Apply minimal eye movements when speaking
         this.applyEyeMovements();
         
-        // Apply phoneme-based lip sync if we have an active timeline
-        if (this.isAudioPlaying && this.currentVisemeTimeline) {
-            this.applyPhonemeLipSync();
-        }
+        // Apply phoneme-based lip sync
+        this.applyPhonemeLipSync();
     }
 
     applyMorphTarget(name, value) {
@@ -1013,6 +1295,17 @@ class FacialAnimationSystem {
         
         // Calculate current time in the audio playback
         const currentAudioTime = (performance.now() - this.audioStartTime) / 1000;
+        
+        // Check if we've reached the end of the viseme timeline - use a stricter check
+        const lastViseme = this.currentVisemeTimeline[this.currentVisemeTimeline.length - 1];
+        if (lastViseme && currentAudioTime >= lastViseme.endTime) {
+            // We've reached the end of the timeline, immediately start transition to resting
+            console.log('End of viseme timeline reached at time', currentAudioTime, 'ending at', lastViseme.endTime);
+            this.isAudioPlaying = false;
+            this.transitionToRestingFace = true;
+            this.transitionStartTime = null;
+            return;
+        }
         
         // Get the current viseme based on audio time
         const visemeData = this.phonemeLipSync.getVisemeAtTime(this.currentVisemeTimeline, currentAudioTime);
@@ -1090,6 +1383,86 @@ class FacialAnimationSystem {
         const subtleMovement = Math.sin(idleTime) * 0.004;
         this.applyMorphTarget("mouthLeft", Math.max(0, subtleMovement) * 0.004);
         this.applyMorphTarget("mouthRight", Math.max(0, -subtleMovement) * 0.004);
+    }
+
+    // Method to smoothly transition to resting face
+    applyRestingFaceTransition() {
+        if (!this.transitionStartTime) {
+            this.transitionStartTime = performance.now();
+            this.transitionDuration = 300; // 300ms transition
+            
+            // Save current state of morphs
+            if (!this.morphStartState && this.morphTargetMesh) {
+                this.morphStartState = [...this.morphTargetMesh.morphTargetInfluences];
+            }
+        }
+        
+        const now = performance.now();
+        const elapsed = now - this.transitionStartTime;
+        const progress = Math.min(1.0, elapsed / this.transitionDuration);
+        
+        // Apply cubic easing for natural movement
+        const easedProgress = this.cubicEaseOut(progress);
+        
+        if (progress >= 1.0) {
+            // Transition complete
+            this.transitionToRestingFace = false;
+            this.transitionStartTime = null;
+            this.morphStartState = null;
+            
+            // Ensure all morph targets are reset
+            this.morphTargetMesh.morphTargetInfluences.fill(0);
+            
+            // Enable eye movements only
+            this.applyEyeMovements();
+            return;
+        }
+        
+        // Reset all morph targets first
+        this.morphTargetMesh.morphTargetInfluences.fill(0);
+        
+        // Apply eye movements during transition
+        this.applyEyeMovements();
+        
+        // Apply transition to neutral expression/closed mouth
+        if (this.morphStartState) {
+            const dictionary = this.morphTargetMesh.morphTargetDictionary;
+            
+            // Special treatment for mouth-related morphs
+            const mouthMorphs = [
+                'mouthClose', 'viseme_sil', 'mouthRollUpper', 'mouthRollLower',
+                'mouthStretchLeft', 'mouthStretchRight', 'mouthPucker', 'mouthFunnel',
+                'jawOpen', 'jawForward', 'jawLeft', 'jawRight'
+            ];
+            
+            // Gradually close mouth by zeroing mouth morphs and applying specific closed-mouth morphs
+            mouthMorphs.forEach(morphName => {
+                if (morphName in dictionary) {
+                    const index = dictionary[morphName];
+                    const startValue = this.morphStartState[index] || 0;
+                    
+                    // Special handling for closing morphs - increase their influence
+                    if (morphName === 'mouthClose' || morphName === 'viseme_sil' || morphName === 'mouthRollUpper') {
+                        // Target values for closed mouth
+                        const targetValue = morphName === 'mouthClose' ? 0.12 : 
+                                          morphName === 'viseme_sil' ? 0.2 : 
+                                          morphName === 'mouthRollUpper' ? 0.1 : 0;
+                        
+                        // Interpolate from current to target
+                        const value = startValue * (1 - easedProgress) + targetValue * easedProgress;
+                        this.morphTargetMesh.morphTargetInfluences[index] = value;
+                    } else {
+                        // For other mouth morphs, gradually reduce to zero
+                        this.morphTargetMesh.morphTargetInfluences[index] = startValue * (1 - easedProgress);
+                    }
+                }
+            });
+        }
+    }
+    
+    // Cubic ease out function for smoother transitions
+    cubicEaseOut(t) {
+        return 1 - Math.pow(1 - t, 3);
     }
 
     applyEyeMovements() {
@@ -1200,6 +1573,11 @@ class FacialAnimationSystem {
                 this.audioManager.stop();
                 this.isAudioPlaying = false;
                 this.currentVisemeTimeline = null;
+                this.lastVisemes = null;
+                
+                // Ensure any ongoing transition is completed
+                this.transitionToRestingFace = false;
+                this.morphTargetMesh.morphTargetInfluences.fill(0);
             }
             
             // Generate speech from text
@@ -1215,9 +1593,12 @@ class FacialAnimationSystem {
             // Generate viseme timeline based on text and audio duration
             this.currentVisemeTimeline = await this.phonemeLipSync.createVisemeTimeline(text, audioData.duration);
             
-            // Start facial animation (but don't stop original avatar animation)
-            this.isAudioPlaying = true;
-            this.audioStartTime = performance.now();
+            // Log the timeline for debugging
+            console.log('Viseme timeline created with', this.currentVisemeTimeline.length, 'visemes');
+            if (this.currentVisemeTimeline.length > 0) {
+                const lastViseme = this.currentVisemeTimeline[this.currentVisemeTimeline.length - 1];
+                console.log('Last viseme ends at', lastViseme.endTime, 'audio duration is', audioData.duration);
+            }
             
             let playbackStarted = false;
             let cleanupDone = false;
@@ -1230,53 +1611,66 @@ class FacialAnimationSystem {
                 console.log('Audio playback completed, cleaning up resources');
                 this.isAudioPlaying = false;
                 this.currentVisemeTimeline = null;
+                this.lastVisemes = null; // Clear the viseme history
                 
-                // Reset morph targets when speech ends, but don't stop the animation
-                if (this.morphTargetMesh) {
-                    this.morphTargetMesh.morphTargetInfluences.fill(0);
-                }
+                // Start transition to resting face
+                this.transitionToRestingFace = true;
+                this.transitionStartTime = null; // Will be set in the transition method
+                this.morphStartState = null;
                 
                 // Note: We're now NOT revoking the URL to avoid issues with reuse
                 // URL.revokeObjectURL(audioData.url);
             };
             
-            // Attempt to play audio through AudioManager first
+            // Prepare audio playback
+            let audioElement;
             try {
-                playbackStarted = await this.audioManager.playAudio(audioData.url);
-                console.log('AudioManager playback started:', playbackStarted);
+                // Create a new audio element with precise event listeners
+                audioElement = new Audio(audioData.url);
+                
+                // Set up event listeners before playback begins
+                audioElement.addEventListener('play', () => {
+                    console.log('Audio playback started');
+                    // Start animation precisely when audio starts
+                    this.isAudioPlaying = true;
+                    this.audioStartTime = performance.now();
+                });
+                
+                audioElement.addEventListener('ended', () => {
+                    console.log('Audio playback ended');
+                    this.isAudioPlaying = false;
+                    cleanupAudio();
+                });
+                
+                // Set up error handling
+                audioElement.addEventListener('error', (e) => {
+                    console.error('Audio playback error:', e);
+                    this.isAudioPlaying = false;
+                    cleanupAudio();
+                });
+                
+                // Start playback
+                const playPromise = audioElement.play();
+                if (playPromise !== undefined) {
+                    await playPromise;
+                    playbackStarted = true;
+                }
             } catch (audioError) {
-                console.error('Error with AudioManager playback:', audioError);
-                playbackStarted = false;
-            }
-            
-            // If AudioManager playback failed, try direct audio element approach as fallback
-            if (!playbackStarted) {
-                console.warn('Attempting fallback audio playback method');
-                const audioElement = document.getElementById('audioInput');
-                if (audioElement) {
-                    try {
-                        audioElement.src = audioData.url;
-                        await audioElement.play();
-                        playbackStarted = true;
-                        console.log('Direct audio playback started');
-                        
-                        // Set up ended handler for this element
-                        audioElement.onended = cleanupAudio;
-                    } catch (e) {
-                        console.error('Direct audio playback failed:', e);
-                        // Try one more fallback with a new Audio element
-                        try {
-                            const newAudio = new Audio(audioData.url);
-                            await newAudio.play();
-                            playbackStarted = true;
-                            console.log('New Audio element playback started');
-                            
-                            // Set up ended handler for this element
-                            newAudio.onended = cleanupAudio;
-                        } catch (finalError) {
-                            console.error('All audio playback methods failed:', finalError);
-                        }
+                console.error('Error with direct audio playback:', audioError);
+                
+                // Fall back to AudioManager if direct approach fails
+                try {
+                    playbackStarted = await this.audioManager.playAudio(audioData.url);
+                    console.log('AudioManager playback started:', playbackStarted);
+                    
+                    // Start animation now that audio has started
+                    if (playbackStarted) {
+                        this.isAudioPlaying = true;
+                        this.audioStartTime = performance.now();
                     }
+                } catch (managerError) {
+                    console.error('All audio playback methods failed:', managerError);
+                    playbackStarted = false;
                 }
             }
             
@@ -1286,28 +1680,25 @@ class FacialAnimationSystem {
                 return;
             }
             
-            return new Promise((resolve) => {
-                // Get the audio element
-                const audioElement = document.getElementById('audioInput');
-                
-                // Set up event listener for the audio element if it exists
-                if (audioElement) {
-                    audioElement.onended = () => {
-                        console.log('Audio ended event triggered');
-                        cleanupAudio();
-                        resolve();
-                    };
+            // Set a safety timeout based on the expected audio duration
+            const timeoutDuration = (audioData.duration * 1000) + 500; // Add 500ms buffer
+            const safetyTimeout = setTimeout(() => {
+                if (this.isAudioPlaying) {
+                    console.log('Safety timeout reached, forcing cleanup');
+                    this.isAudioPlaying = false;
+                    cleanupAudio();
                 }
-                
-                // Set a timeout as backup
-                const timeoutDuration = (audioData.duration * 1000) + 1000; // Audio duration plus 1 second buffer
-                setTimeout(() => {
-                    if (this.isAudioPlaying) {
-                        console.log('Audio playback timeout reached, forcing cleanup');
-                        cleanupAudio();
+            }, timeoutDuration);
+            
+            // Return a promise that resolves when audio playback is complete
+            return new Promise((resolve) => {
+                const checkInterval = setInterval(() => {
+                    if (!this.isAudioPlaying && !this.transitionToRestingFace) {
+                        clearInterval(checkInterval);
+                        clearTimeout(safetyTimeout);
                         resolve();
                     }
-                }, timeoutDuration);
+                }, 100);
             });
         } catch (error) {
             console.error('Error in speech response:', error);
@@ -1387,6 +1778,10 @@ class FacialAnimationSystem {
         // Reset any animation state
         this.isAudioPlaying = false;
         this.currentVisemeTimeline = null;
+        this.lastVisemes = null;
+        this.transitionToRestingFace = false;
+        this.transitionStartTime = null;
+        this.morphStartState = null;
         
         // Reset camera to a good viewing position
         this.camera.position.set(0, 1.6, 2.0);
