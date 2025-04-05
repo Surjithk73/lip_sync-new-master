@@ -22,33 +22,44 @@ class ChatbotSystem {
 
     initSpeechRecognition() {
         if (!('webkitSpeechRecognition' in window)) {
-            alert('Speech recognition is not supported in this browser. Please try using Chrome.');
+            console.error('Speech recognition not supported in this browser');
+            this.addMessageToChat('ai', 'Speech recognition is not supported in this browser. Please try using Chrome or Edge.');
+            this.showFallbackExplanation();
+            this.offerTextInputAlternative();
             return;
         }
 
         // Check for microphone permissions first
         this.checkMicrophonePermission();
         
-        // Track network status
+        // Track network status with more aggressive checking
         this.isOnline = navigator.onLine;
+        this.networkErrorCount = 0;
+        
         window.addEventListener('online', () => {
             this.isOnline = true;
+            this.networkErrorCount = 0;
             this.addMessageToChat('ai', 'Network connection restored. Speech recognition is now available.');
         });
+        
         window.addEventListener('offline', () => {
             this.isOnline = false;
             if (this.isRecording) {
                 this.stopRecording();
                 this.addMessageToChat('ai', 'Network connection lost. Speech recognition paused.');
+                this.offerTextInputAlternative();
             }
         });
+
+        // Test network connectivity to speech servers
+        this.testNetworkConnectivity();
 
         this.recognition = new webkitSpeechRecognition();
         this.recognition.continuous = false;
         this.recognition.interimResults = true;
         this.recognition.lang = 'en-US';
         
-        // Add longer timeout for more reliability
+        // Configure for better reliability
         this.recognition.maxAlternatives = 3;
 
         this.recognition.onresult = (event) => {
@@ -62,21 +73,28 @@ class ChatbotSystem {
         this.recognition.onend = () => {
             if (this.isRecording && !this.processingResponse) {
                 // Check if we're online before restarting
-                if (this.isOnline) {
+                if (this.isOnline && this.networkErrorCount < 3) {
                     // Add small delay before restarting to avoid rapid restarts
                     setTimeout(() => {
                         try {
                             this.recognition.start();
+                            console.log('Speech recognition restarted');
                         } catch (error) {
                             console.error('Error restarting speech recognition:', error);
                             this.updateRecordingUI(false);
                             this.isRecording = false;
+                            this.offerTextInputAlternative();
                         }
-                    }, 100);
+                    }, 300);
                 } else {
+                    console.log('Not restarting speech recognition due to network issues');
                     this.updateRecordingUI(false);
                     this.isRecording = false;
-                    this.addMessageToChat('ai', 'Speech recognition stopped due to network issues. Please check your connection and try again.');
+                    if (this.networkErrorCount >= 3) {
+                        this.addMessageToChat('ai', 'Speech recognition has been disabled due to repeated network errors.');
+                        this.showFallbackExplanation();
+                        this.offerTextInputAlternative();
+                    }
                 }
             } else {
                 this.updateRecordingUI(false);
@@ -92,31 +110,43 @@ class ChatbotSystem {
                 case 'permission-denied':
                     this.addMessageToChat('ai', 'Microphone access was denied. Please allow microphone access to use speech recognition.');
                     this.updateRecordingUI(false);
+                    this.offerTextInputAlternative();
                     break;
                 case 'no-speech':
                     this.addMessageToChat('ai', 'No speech was detected. Please try speaking again.');
                     break;
                 case 'network':
+                    this.networkErrorCount++;
                     // Check actual network connectivity
                     if (!navigator.onLine) {
-                        this.addMessageToChat('ai', 'Your device appears to be offline. Please check your internet connection and try again.');
+                        this.addMessageToChat('ai', 'Your device appears to be offline. Please check your internet connection.');
                     } else {
-                        this.addMessageToChat('ai', 'Network error occurred. This could be due to a firewall, proxy, or connection issue. Please try again later.');
+                        if (this.networkErrorCount === 1) {
+                            this.addMessageToChat('ai', 'Network error connecting to speech recognition service. Trying once more...');
+                        } else {
+                            this.showNetworkErrorExplanation();
+                            this.isOnline = false; // Disable further attempts
+                            this.stopRecording();
+                        }
                         
-                        // Offer text input alternative
+                        // Always offer text input on network errors
                         this.offerTextInputAlternative();
                     }
                     break;
                 case 'aborted':
-                    // Just log this, don't show message to user as it's usually intentional
                     console.log('Speech recognition aborted');
                     break;
                 default:
-                    this.addMessageToChat('ai', 'An error occurred with speech recognition. Please try again.');
+                    this.addMessageToChat('ai', 'An error occurred with speech recognition. Please try again or use text input.');
+                    this.offerTextInputAlternative();
             }
             
-            this.updateRecordingUI(false);
-            this.isRecording = false;
+            if (event.error !== 'no-speech' && event.error !== 'aborted') {
+                this.updateRecordingUI(false);
+                if (this.isRecording && event.error === 'network' && this.networkErrorCount >= 2) {
+                    this.isRecording = false;
+                }
+            }
         };
     }
 
@@ -136,14 +166,24 @@ class ChatbotSystem {
         
         // Add a welcome message
         this.addWelcomeMessage();
+        
+        // Initialize text input alternative immediately
+        this.offerTextInputAlternative();
+        
+        // Test network connectivity to see if speech recognition is likely to work
+        this.testNetworkConnectivity().then(result => {
+            if (this.networkErrorCount > 0) {
+                this.addMessageToChat('ai', 'Speech recognition might not work due to network connectivity issues. You can use text input as an alternative.');
+            }
+        });
     }
 
     addWelcomeMessage() {
         // Add a welcome message to guide the user
         const welcomeMessages = [
-            "Hi there! Click the 'Start Recording' button and speak to interact with me.",
-            "Welcome! I'm ready to listen. Click the button below and speak when you're ready.",
-            "Hello! To begin our conversation, click 'Start Recording' and share what's on your mind."
+            "Hi there! You can either click the 'Start Recording' button to speak, or use the text input below.",
+            "Welcome! I'm ready to listen. You can speak using the recording button or type in the text box below.",
+            "Hello! To begin our conversation, either use the microphone button or just type your message below."
         ];
         
         const randomMessage = welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)];
@@ -161,11 +201,15 @@ class ChatbotSystem {
                 return;
             }
             
+            // Reset network error count on new recording attempt
+            this.networkErrorCount = 0;
+            
             // Check microphone permissions before starting recording
             const hasPermission = await this.checkMicrophonePermission();
             if (!hasPermission) {
                 console.error('Microphone permission not granted, cannot start recording');
                 this.addMessageToChat('ai', 'Please allow microphone access to use speech recognition.');
+                this.offerTextInputAlternative();
                 return;
             }
 
@@ -180,6 +224,7 @@ class ChatbotSystem {
             
             // Start speech recognition with error handling and timeout
             try {
+                await this.testNetworkConnectivity();
                 this.recognition.start();
                 console.log('Speech recognition started');
                 
@@ -200,14 +245,16 @@ class ChatbotSystem {
                 }, 5000); // 5 second timeout
             } catch (error) {
                 console.error('Error starting speech recognition:', error);
-                this.addMessageToChat('ai', 'Could not start speech recognition. Please try again.');
+                this.addMessageToChat('ai', 'Could not start speech recognition. Please use text input instead.');
                 this.updateRecordingUI(false);
                 this.isRecording = false;
+                this.offerTextInputAlternative();
             }
         } catch (error) {
             console.error('Error in startRecording:', error);
-            this.addMessageToChat('ai', 'An error occurred. Please try again.');
+            this.addMessageToChat('ai', 'An error occurred. Please try text input instead.');
             this.updateRecordingUI(false);
+            this.offerTextInputAlternative();
         }
     }
 
@@ -467,34 +514,73 @@ Always prioritize the user's wellbeing, maintain appropriate boundaries, and enc
     offerTextInputAlternative() {
         // Create text input alternative if it doesn't exist
         if (!document.getElementById('text-input-alternative')) {
+            console.log('Creating text input alternative');
             const chatInputArea = document.getElementById('chat-input-area');
             
-            // Create container
+            if (!chatInputArea) {
+                console.error('Chat input area not found');
+                return;
+            }
+            
+            // Create container with improved styling
             const container = document.createElement('div');
             container.id = 'text-input-alternative';
             container.style.display = 'flex';
-            container.style.marginTop = '10px';
+            container.style.marginTop = '15px';
             container.style.width = '100%';
+            container.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
+            container.style.borderRadius = '24px';
+            container.style.padding = '5px';
+            container.style.background = '#f9f9f9';
             
             // Create text input
             const input = document.createElement('input');
+            input.id = 'text-input-field';
             input.type = 'text';
             input.placeholder = 'Type your message here...';
             input.style.flex = '1';
-            input.style.padding = '8px';
+            input.style.padding = '12px 16px';
             input.style.borderRadius = '20px';
             input.style.border = '1px solid #ccc';
-            input.style.marginRight = '5px';
+            input.style.marginRight = '10px';
+            input.style.fontSize = '16px';
+            input.style.background = 'white';
             
             // Create send button
             const button = document.createElement('button');
             button.textContent = 'Send';
-            button.style.padding = '8px 15px';
+            button.style.padding = '12px 20px';
             button.style.borderRadius = '20px';
             button.style.backgroundColor = '#4CAF50';
             button.style.color = 'white';
             button.style.border = 'none';
             button.style.cursor = 'pointer';
+            button.style.fontSize = '16px';
+            button.style.fontWeight = 'bold';
+            
+            // Make it more visible
+            container.style.animation = 'fadeIn 0.5s';
+            const styleEl = document.createElement('style');
+            styleEl.textContent = `
+                @keyframes fadeIn {
+                    from { opacity: 0; transform: translateY(10px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                #text-input-field:focus {
+                    outline: none;
+                    border-color: #4CAF50;
+                    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+                }
+                #text-input-alternative button:hover {
+                    background-color: #45a049;
+                    transform: translateY(-1px);
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                }
+                #text-input-alternative button:active {
+                    transform: translateY(1px);
+                }
+            `;
+            document.head.appendChild(styleEl);
             
             // Add event listeners
             button.addEventListener('click', () => {
@@ -523,11 +609,74 @@ Always prioritize the user's wellbeing, maintain appropriate boundaries, and enc
             chatInputArea.appendChild(container);
             
             // Focus the input
-            input.focus();
-            
-            // Add info message
-            this.addMessageToChat('ai', 'You can use text input below as an alternative to speech recognition.');
+            setTimeout(() => input.focus(), 100);
+        } else {
+            // If it already exists, make sure it's visible and focused
+            const input = document.getElementById('text-input-field');
+            if (input) {
+                input.parentElement.style.display = 'flex';
+                setTimeout(() => input.focus(), 100);
+            }
         }
+    }
+
+    // Add method to test connectivity to speech recognition servers
+    async testNetworkConnectivity() {
+        // We'll use a simple fetch to google.com as a proxy for checking overall connectivity
+        try {
+            // Try to fetch with a short timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+            
+            const response = await fetch('https://www.google.com/generate_204', { 
+                method: 'HEAD',
+                mode: 'no-cors',
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            console.log('Network connectivity test passed');
+            this.isOnline = true;
+        } catch (error) {
+            console.warn('Network connectivity test failed:', error);
+            if (error.name === 'AbortError') {
+                console.warn('Network request timed out - might have connectivity issues');
+            }
+            // Don't set offline immediately, but be prepared for issues
+            this.networkErrorCount++;
+        }
+    }
+
+    // Show detailed information about network errors
+    showNetworkErrorExplanation() {
+        const message = `
+            There seems to be an issue with speech recognition.
+            
+            Common causes:
+            - Firewall or security software blocking access
+            - VPN or proxy interfering with connections
+            - Corporate network restrictions
+            - Speech servers may be unavailable
+            
+            Please use the text input below instead.
+        `;
+        
+        this.addMessageToChat('ai', message.trim().replace(/\n\s+/g, ' ').replace(/\s\s+/g, ' '));
+    }
+    
+    // Show explanation for browser compatibility issues
+    showFallbackExplanation() {
+        const message = `
+            Speech recognition requires:
+            - Chrome or Edge browser
+            - Microphone permissions
+            - Stable internet connection
+            - Access to Google's speech servers
+            
+            You can still chat by typing below.
+        `;
+        
+        this.addMessageToChat('ai', message.trim().replace(/\n\s+/g, ' ').replace(/\s\s+/g, ' '));
     }
 }
 
