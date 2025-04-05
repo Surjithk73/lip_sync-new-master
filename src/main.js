@@ -17,18 +17,39 @@ class ChatbotSystem {
         this.setupChatInterface();
         this.isRecording = false;
         this.processingResponse = false;
+        this.microphonePermissionChecked = false;
     }
 
     initSpeechRecognition() {
         if (!('webkitSpeechRecognition' in window)) {
-            alert('Speech recognition is not supported in this browser.');
+            alert('Speech recognition is not supported in this browser. Please try using Chrome.');
             return;
         }
+
+        // Check for microphone permissions first
+        this.checkMicrophonePermission();
+        
+        // Track network status
+        this.isOnline = navigator.onLine;
+        window.addEventListener('online', () => {
+            this.isOnline = true;
+            this.addMessageToChat('ai', 'Network connection restored. Speech recognition is now available.');
+        });
+        window.addEventListener('offline', () => {
+            this.isOnline = false;
+            if (this.isRecording) {
+                this.stopRecording();
+                this.addMessageToChat('ai', 'Network connection lost. Speech recognition paused.');
+            }
+        });
 
         this.recognition = new webkitSpeechRecognition();
         this.recognition.continuous = false;
         this.recognition.interimResults = true;
         this.recognition.lang = 'en-US';
+        
+        // Add longer timeout for more reliability
+        this.recognition.maxAlternatives = 3;
 
         this.recognition.onresult = (event) => {
             const transcript = event.results[0][0].transcript;
@@ -40,7 +61,23 @@ class ChatbotSystem {
 
         this.recognition.onend = () => {
             if (this.isRecording && !this.processingResponse) {
-                this.recognition.start();
+                // Check if we're online before restarting
+                if (this.isOnline) {
+                    // Add small delay before restarting to avoid rapid restarts
+                    setTimeout(() => {
+                        try {
+                            this.recognition.start();
+                        } catch (error) {
+                            console.error('Error restarting speech recognition:', error);
+                            this.updateRecordingUI(false);
+                            this.isRecording = false;
+                        }
+                    }, 100);
+                } else {
+                    this.updateRecordingUI(false);
+                    this.isRecording = false;
+                    this.addMessageToChat('ai', 'Speech recognition stopped due to network issues. Please check your connection and try again.');
+                }
             } else {
                 this.updateRecordingUI(false);
             }
@@ -48,7 +85,38 @@ class ChatbotSystem {
 
         this.recognition.onerror = (event) => {
             console.error('Speech recognition error:', event.error);
+            
+            // Handle specific error types
+            switch (event.error) {
+                case 'not-allowed':
+                case 'permission-denied':
+                    this.addMessageToChat('ai', 'Microphone access was denied. Please allow microphone access to use speech recognition.');
+                    this.updateRecordingUI(false);
+                    break;
+                case 'no-speech':
+                    this.addMessageToChat('ai', 'No speech was detected. Please try speaking again.');
+                    break;
+                case 'network':
+                    // Check actual network connectivity
+                    if (!navigator.onLine) {
+                        this.addMessageToChat('ai', 'Your device appears to be offline. Please check your internet connection and try again.');
+                    } else {
+                        this.addMessageToChat('ai', 'Network error occurred. This could be due to a firewall, proxy, or connection issue. Please try again later.');
+                        
+                        // Offer text input alternative
+                        this.offerTextInputAlternative();
+                    }
+                    break;
+                case 'aborted':
+                    // Just log this, don't show message to user as it's usually intentional
+                    console.log('Speech recognition aborted');
+                    break;
+                default:
+                    this.addMessageToChat('ai', 'An error occurred with speech recognition. Please try again.');
+            }
+            
             this.updateRecordingUI(false);
+            this.isRecording = false;
         };
     }
 
@@ -65,26 +133,99 @@ class ChatbotSystem {
                 this.stopRecording();
             }
         });
+        
+        // Add a welcome message
+        this.addWelcomeMessage();
     }
 
-    startRecording() {
+    addWelcomeMessage() {
+        // Add a welcome message to guide the user
+        const welcomeMessages = [
+            "Hi there! Click the 'Start Recording' button and speak to interact with me.",
+            "Welcome! I'm ready to listen. Click the button below and speak when you're ready.",
+            "Hello! To begin our conversation, click 'Start Recording' and share what's on your mind."
+        ];
+        
+        const randomMessage = welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)];
+        this.addMessageToChat('ai', randomMessage);
+    }
+
+    async startRecording() {
         if (this.processingResponse) return;
 
-        this.isRecording = true;
-        this.updateRecordingUI(true);
-        
-        // Create a new message container for this recording session
-        this.currentMessage = document.createElement('div');
-        this.currentMessage.classList.add('message', 'user-message');
-        this.currentMessage.textContent = '';
-        this.chatMessages.appendChild(this.currentMessage);
-        
-        this.recognition.start();
+        try {
+            // Check if we're online
+            if (!navigator.onLine) {
+                this.addMessageToChat('ai', 'Your device appears to be offline. Speech recognition requires an internet connection.');
+                this.offerTextInputAlternative();
+                return;
+            }
+            
+            // Check microphone permissions before starting recording
+            const hasPermission = await this.checkMicrophonePermission();
+            if (!hasPermission) {
+                console.error('Microphone permission not granted, cannot start recording');
+                this.addMessageToChat('ai', 'Please allow microphone access to use speech recognition.');
+                return;
+            }
+
+            this.isRecording = true;
+            this.updateRecordingUI(true);
+            
+            // Create a new message container for this recording session
+            this.currentMessage = document.createElement('div');
+            this.currentMessage.classList.add('message', 'user-message');
+            this.currentMessage.textContent = '';
+            this.chatMessages.appendChild(this.currentMessage);
+            
+            // Start speech recognition with error handling and timeout
+            try {
+                this.recognition.start();
+                console.log('Speech recognition started');
+                
+                // Set a timeout to detect if recognition doesn't start properly
+                this.recognitionTimeout = setTimeout(() => {
+                    if (this.isRecording) {
+                        console.log('Speech recognition timeout - may not have started properly');
+                        try {
+                            this.recognition.stop();
+                        } catch (e) {
+                            // Ignore errors when stopping
+                        }
+                        this.addMessageToChat('ai', 'Speech recognition is taking too long to connect. This might be due to network issues.');
+                        this.offerTextInputAlternative();
+                        this.updateRecordingUI(false);
+                        this.isRecording = false;
+                    }
+                }, 5000); // 5 second timeout
+            } catch (error) {
+                console.error('Error starting speech recognition:', error);
+                this.addMessageToChat('ai', 'Could not start speech recognition. Please try again.');
+                this.updateRecordingUI(false);
+                this.isRecording = false;
+            }
+        } catch (error) {
+            console.error('Error in startRecording:', error);
+            this.addMessageToChat('ai', 'An error occurred. Please try again.');
+            this.updateRecordingUI(false);
+        }
     }
 
     stopRecording() {
         this.isRecording = false;
-        this.recognition.stop();
+        
+        // Clear any pending timeout
+        if (this.recognitionTimeout) {
+            clearTimeout(this.recognitionTimeout);
+            this.recognitionTimeout = null;
+        }
+        
+        try {
+            this.recognition.stop();
+        } catch (error) {
+            console.error('Error stopping recognition:', error);
+        }
+        
         this.updateRecordingUI(false);
         this.currentMessage = null;
     }
@@ -92,7 +233,62 @@ class ChatbotSystem {
     updateRecordingUI(isRecording) {
         this.recordButton.textContent = isRecording ? 'Stop Recording' : 'Start Recording';
         this.recordButton.classList.toggle('recording', isRecording);
-        this.recordingStatus.textContent = isRecording ? 'Listening...' : 'Click to start speaking';
+        
+        // Update the recording status text with more informative messages
+        if (isRecording) {
+            this.recordingStatus.textContent = 'Listening... Speak now';
+            this.recordingStatus.style.color = '#4CAF50'; // Green to indicate active
+            
+            // Add pulsing animation to the status text
+            this.recordingStatus.style.animation = 'pulse 1.5s infinite';
+        } else {
+            this.recordingStatus.textContent = 'Click to start speaking';
+            this.recordingStatus.style.color = ''; // Reset to default
+            this.recordingStatus.style.animation = ''; // Remove animation
+        }
+        
+        // Also add a visual recording indicator
+        if (!this.recordingIndicator) {
+            this.recordingIndicator = document.createElement('div');
+            this.recordingIndicator.className = 'recording-indicator';
+            
+            // Add styles if they don't exist
+            if (!document.getElementById('recording-indicator-style')) {
+                const style = document.createElement('style');
+                style.id = 'recording-indicator-style';
+                style.textContent = `
+                    .recording-indicator {
+                        width: 12px;
+                        height: 12px;
+                        background-color: #f44336;
+                        border-radius: 50%;
+                        display: inline-block;
+                        margin-right: 8px;
+                        vertical-align: middle;
+                        opacity: 0;
+                        transition: opacity 0.3s ease;
+                    }
+                    .recording-indicator.active {
+                        opacity: 1;
+                        animation: pulse 1.5s infinite;
+                    }
+                    @keyframes pulse {
+                        0% { transform: scale(0.95); opacity: 1; }
+                        50% { transform: scale(1.1); opacity: 0.8; }
+                        100% { transform: scale(0.95); opacity: 1; }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            
+            // Insert indicator before status text
+            this.recordingStatus.parentNode.insertBefore(this.recordingIndicator, this.recordingStatus);
+        }
+        
+        // Toggle active state
+        if (this.recordingIndicator) {
+            this.recordingIndicator.classList.toggle('active', isRecording);
+        }
     }
 
     addMessageToChat(sender, text) {
@@ -217,6 +413,122 @@ Always prioritize the user's wellbeing, maintain appropriate boundaries, and enc
 
         return defaultResponses[Math.floor(Math.random() * defaultResponses.length)];
     }
+
+    // Method to check microphone permissions
+    async checkMicrophonePermission() {
+        try {
+            // Check if we already have microphone permission
+            const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
+            
+            if (permissionStatus.state === 'granted') {
+                console.log('Microphone permission already granted');
+                return true;
+            } else if (permissionStatus.state === 'prompt') {
+                // We'll need to ask for permission, show a hint to the user
+                this.addMessageToChat('ai', 'Please allow microphone access when prompted to use speech recognition.');
+            } else if (permissionStatus.state === 'denied') {
+                // Permission has been denied, inform the user
+                this.addMessageToChat('ai', 'Microphone access is blocked. Please enable it in your browser settings to use speech recognition.');
+                return false;
+            }
+            
+            // Add event listener for permission changes
+            permissionStatus.onchange = () => {
+                if (permissionStatus.state === 'granted') {
+                    console.log('Microphone permission granted');
+                } else {
+                    console.log('Microphone permission not granted:', permissionStatus.state);
+                    if (this.isRecording) {
+                        this.stopRecording();
+                    }
+                }
+            };
+            
+            return true;
+        } catch (error) {
+            console.error('Error checking microphone permission:', error);
+            
+            // Fallback to requesting permission directly if permissions API not supported
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Stop all tracks to release the microphone
+                stream.getTracks().forEach(track => track.stop());
+                console.log('Microphone permission granted through getUserMedia');
+                return true;
+            } catch (err) {
+                console.error('Failed to get microphone permission:', err);
+                this.addMessageToChat('ai', 'Microphone access is required for speech recognition.');
+                return false;
+            }
+        }
+    }
+
+    // Offer text input as alternative when speech recognition fails
+    offerTextInputAlternative() {
+        // Create text input alternative if it doesn't exist
+        if (!document.getElementById('text-input-alternative')) {
+            const chatInputArea = document.getElementById('chat-input-area');
+            
+            // Create container
+            const container = document.createElement('div');
+            container.id = 'text-input-alternative';
+            container.style.display = 'flex';
+            container.style.marginTop = '10px';
+            container.style.width = '100%';
+            
+            // Create text input
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder = 'Type your message here...';
+            input.style.flex = '1';
+            input.style.padding = '8px';
+            input.style.borderRadius = '20px';
+            input.style.border = '1px solid #ccc';
+            input.style.marginRight = '5px';
+            
+            // Create send button
+            const button = document.createElement('button');
+            button.textContent = 'Send';
+            button.style.padding = '8px 15px';
+            button.style.borderRadius = '20px';
+            button.style.backgroundColor = '#4CAF50';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.cursor = 'pointer';
+            
+            // Add event listeners
+            button.addEventListener('click', () => {
+                const text = input.value.trim();
+                if (text) {
+                    this.addMessageToChat('user', text);
+                    this.generateResponse(text);
+                    input.value = '';
+                }
+            });
+            
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    const text = input.value.trim();
+                    if (text) {
+                        this.addMessageToChat('user', text);
+                        this.generateResponse(text);
+                        input.value = '';
+                    }
+                }
+            });
+            
+            // Add to DOM
+            container.appendChild(input);
+            container.appendChild(button);
+            chatInputArea.appendChild(container);
+            
+            // Focus the input
+            input.focus();
+            
+            // Add info message
+            this.addMessageToChat('ai', 'You can use text input below as an alternative to speech recognition.');
+        }
+    }
 }
 
 class FacialAnimationSystem {
@@ -264,27 +576,26 @@ class FacialAnimationSystem {
             const modelLoader = this.modelLoader;
             const model = await modelLoader.loadModel('/assets/models/model_full.glb');
             
-            // Position the model much lower for VR viewing
-            model.position.set(0, 0.3, -1.0); // Reduced from 0.8 to 0.3 meters (much lower)
+            // Keep the model at its original size and position
+            // For full body models, adjust Y position to place feet on ground
+            model.position.y = 0; // Ensure the model sits at the origin Y
             this.scene.add(model);
+            
+            // Add a button to reset the model to its original state
+            this.addResetModelButton();
+            
+            // Find mesh with morph targets but don't apply animations yet
             this.morphTargetMesh = modelLoader.findMorphTargetMesh(model);
             
             if (!this.morphTargetMesh) {
                 throw new Error('No mesh with morph targets found in the model');
             }
             
-            // Initialize morph target system
+            // Initialize morph targets for lip sync
             this.initializeMorphTargets();
             
-            // Try to create default idle animation directly - the external animation files aren't working
-            console.log('Creating default idle animation for model...');
-            try {
-                // Use our enhanced default animation
-                modelLoader.createDefaultIdleAnimation(model);
-                console.log('Default idle animation applied successfully');
-            } catch (animError) {
-                console.error('Failed to create idle animation:', animError);
-            }
+            // Skip creating default animation which might affect appearance
+            console.log('Using original model animation only');
             
             return model;
         } catch (error) {
@@ -324,10 +635,12 @@ class FacialAnimationSystem {
         const container = document.getElementById('animation-container');
         const aspect = container.clientWidth / container.clientHeight;
         
-        this.camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000); // Wider FOV for VR
+        // Use a more standard field of view that won't distort the model
+        this.camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer({ 
             antialias: true,
-            alpha: true 
+            alpha: true,
+            preserveDrawingBuffer: true 
         });
         
         // Enable VR with specific XR features
@@ -405,9 +718,9 @@ class FacialAnimationSystem {
                         
                         await this.renderer.xr.setSession(session);
                         
-                        // Reset camera position when entering VR
-                        this.camera.position.set(0, 0.3, 1.0);
-                        this.camera.lookAt(0, 0.3, -1.0);
+                        // Position camera for VR using standard human height parameters
+                        this.camera.position.set(0, 1.6, 2.0);
+                        this.camera.lookAt(0, 1.6, 0);
                         
                         button.textContent = 'Exit VR';
                         
@@ -431,31 +744,33 @@ class FacialAnimationSystem {
         const vrButton = createVRButton();
         container.appendChild(vrButton);
 
-        // Position camera for comfortable viewing in VR
-        this.camera.position.set(0, 0.3, 1.0); // Adjusted to match new model height
-        this.camera.lookAt(0, 0.3, 0);
+        // Position camera at a standard human eye level looking straight ahead
+        this.camera.position.set(0, 1.6, 2.0);
+        this.camera.lookAt(0, 1.6, 0);
 
         // Set up the scene environment
         this.scene.background = new THREE.Color(0x1a1a1a);
 
-        // Lighting setup optimized for VR
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        // Standard lighting setup for realistic renderings of human figures
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
         this.scene.add(ambientLight);
 
-        // Adjust lights to match new model position
-        const frontLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        frontLight.position.set(0, 0.5, 1.5); // Keep light slightly above head
-        frontLight.target.position.set(0, 0.3, -1.0); // Point at new model position
-        frontLight.castShadow = true;
-        this.scene.add(frontLight);
-        this.scene.add(frontLight.target);
+        // Main key light (front facing)
+        const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
+        keyLight.position.set(0, 1.8, 2.5);
+        keyLight.target.position.set(0, 1.6, 0);
+        keyLight.castShadow = true;
+        this.scene.add(keyLight);
+        this.scene.add(keyLight.target);
 
+        // Fill light (left side)
         const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
-        fillLight.position.set(-2, 1.6, 0);
+        fillLight.position.set(-2, 1.8, 0);
         this.scene.add(fillLight);
 
+        // Rim light (behind subject)
         const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
-        rimLight.position.set(0, 1.7, -2);
+        rimLight.position.set(0, 1.8, -2);
         this.scene.add(rimLight);
 
         // Controls for non-VR mode
@@ -464,8 +779,11 @@ class FacialAnimationSystem {
         this.controls.dampingFactor = 0.05;
         this.controls.rotateSpeed = 0.5;
         this.controls.minDistance = 1.0;
-        this.controls.maxDistance = 3.0;
-        this.controls.target.set(0, 0.3, -1.0); // Updated orbit controls target
+        this.controls.maxDistance = 5.0;
+        
+        // Set orbit target to match the model's head position
+        this.controls.target.set(0, 1.6, 0);
+        this.controls.update();
 
         // Handle window resizing
         window.addEventListener('resize', () => {
@@ -484,7 +802,8 @@ class FacialAnimationSystem {
             this.renderer.setAnimationLoop(() => {
                 const delta = this.clock.getDelta();
                 
-                // Update animation mixer (for body animation)
+                // Always update the animation mixer to play the original avaturn_animation
+                // regardless of speech state
                 if (this.modelLoader && this.modelLoader.getMixer()) {
                     this.modelLoader.updateMixer(delta);
                 }
@@ -494,8 +813,10 @@ class FacialAnimationSystem {
                     this.controls.update();
                 }
                 
-                // Update morph targets for facial animation
-                this.updateMorphTargets();
+                // Update morph targets only when needed for lip sync
+                if (this.isAudioPlaying) {
+                    this.updateMorphTargets();
+                }
                 
                 // Render scene
                 this.renderer.render(this.scene, this.camera);
@@ -508,18 +829,21 @@ class FacialAnimationSystem {
     updateMorphTargets() {
         if (!this.morphTargetMesh) return;
 
+        // When not speaking, keep all morph targets at 0 to preserve original model
+        if (!this.isAudioPlaying) {
+            this.morphTargetMesh.morphTargetInfluences.fill(0);
+            return;
+        }
+
         // Reset all morph target influences
         this.morphTargetMesh.morphTargetInfluences.fill(0);
         
-        // Apply eye movements
+        // Apply minimal eye movements when speaking
         this.applyEyeMovements();
         
         // Apply phoneme-based lip sync if we have an active timeline
         if (this.isAudioPlaying && this.currentVisemeTimeline) {
             this.applyPhonemeLipSync();
-        } else {
-            // Apply default resting face
-            this.applyRestingFace();
         }
     }
 
@@ -721,6 +1045,14 @@ class FacialAnimationSystem {
         try {
             console.log('Starting speech response with text:', text);
             
+            // Stop any ongoing audio playback
+            if (this.isAudioPlaying) {
+                // Clean up any existing playback
+                this.audioManager.stop();
+                this.isAudioPlaying = false;
+                this.currentVisemeTimeline = null;
+            }
+            
             // Generate speech from text
             const audioData = await window.chatbot.ttsService.textToSpeech(text);
             
@@ -734,63 +1066,99 @@ class FacialAnimationSystem {
             // Generate viseme timeline based on text and audio duration
             this.currentVisemeTimeline = await this.phonemeLipSync.createVisemeTimeline(text, audioData.duration);
             
-            // Start facial animation
+            // Start facial animation (but don't stop original avatar animation)
             this.isAudioPlaying = true;
             this.audioStartTime = performance.now();
             
-            // Play audio through audio manager
-            const playSuccess = await this.audioManager.playAudio(audioData.url);
+            let playbackStarted = false;
+            let cleanupDone = false;
             
-            if (!playSuccess) {
-                console.error('Failed to play audio through AudioManager');
-                // Try direct audio element approach as fallback
+            // Function to clean up resources when audio is done
+            const cleanupAudio = () => {
+                if (cleanupDone) return;
+                cleanupDone = true;
+                
+                console.log('Audio playback completed, cleaning up resources');
+                this.isAudioPlaying = false;
+                this.currentVisemeTimeline = null;
+                
+                // Reset morph targets when speech ends, but don't stop the animation
+                if (this.morphTargetMesh) {
+                    this.morphTargetMesh.morphTargetInfluences.fill(0);
+                }
+                
+                // Note: We're now NOT revoking the URL to avoid issues with reuse
+                // URL.revokeObjectURL(audioData.url);
+            };
+            
+            // Attempt to play audio through AudioManager first
+            try {
+                playbackStarted = await this.audioManager.playAudio(audioData.url);
+                console.log('AudioManager playback started:', playbackStarted);
+            } catch (audioError) {
+                console.error('Error with AudioManager playback:', audioError);
+                playbackStarted = false;
+            }
+            
+            // If AudioManager playback failed, try direct audio element approach as fallback
+            if (!playbackStarted) {
+                console.warn('Attempting fallback audio playback method');
                 const audioElement = document.getElementById('audioInput');
                 if (audioElement) {
-                    audioElement.src = audioData.url;
-                    audioElement.play().catch(e => console.error('Direct audio playback failed:', e));
+                    try {
+                        audioElement.src = audioData.url;
+                        await audioElement.play();
+                        playbackStarted = true;
+                        console.log('Direct audio playback started');
+                        
+                        // Set up ended handler for this element
+                        audioElement.onended = cleanupAudio;
+                    } catch (e) {
+                        console.error('Direct audio playback failed:', e);
+                        // Try one more fallback with a new Audio element
+                        try {
+                            const newAudio = new Audio(audioData.url);
+                            await newAudio.play();
+                            playbackStarted = true;
+                            console.log('New Audio element playback started');
+                            
+                            // Set up ended handler for this element
+                            newAudio.onended = cleanupAudio;
+                        } catch (finalError) {
+                            console.error('All audio playback methods failed:', finalError);
+                        }
+                    }
                 }
             }
             
+            if (!playbackStarted) {
+                console.error('Unable to start audio playback through any method');
+                cleanupAudio();
+                return;
+            }
+            
             return new Promise((resolve) => {
-                // Create a checker function
-                const checkAudioComplete = () => {
-                    const audioElement = document.getElementById('audioInput');
-                    if (!audioElement || audioElement.ended || audioElement.paused) {
-                        console.log('Audio playback completed');
-                    this.isAudioPlaying = false;
-                        this.currentVisemeTimeline = null;
-                    // Return to neutral expression
-                        if (this.morphTargetMesh) {
-                    this.morphTargetMesh.morphTargetInfluences.fill(0);
-                        }
-                    // Clean up the temporary audio URL
-                        URL.revokeObjectURL(audioData.url);
-                    resolve();
-                    } else {
-                        // Check again in a moment
-                        setTimeout(checkAudioComplete, 100);
-                    }
-                };
-                
-                // Start checking
-                setTimeout(checkAudioComplete, audioData.duration * 1000 + 500);
-                
-                // Also listen for the ended event as backup
+                // Get the audio element
                 const audioElement = document.getElementById('audioInput');
+                
+                // Set up event listener for the audio element if it exists
                 if (audioElement) {
                     audioElement.onended = () => {
                         console.log('Audio ended event triggered');
-                        this.isAudioPlaying = false;
-                        this.currentVisemeTimeline = null;
-                        // Return to neutral expression
-                        if (this.morphTargetMesh) {
-                            this.morphTargetMesh.morphTargetInfluences.fill(0);
-                        }
-                        // Clean up the temporary audio URL
-                        URL.revokeObjectURL(audioData.url);
+                        cleanupAudio();
                         resolve();
                     };
                 }
+                
+                // Set a timeout as backup
+                const timeoutDuration = (audioData.duration * 1000) + 1000; // Audio duration plus 1 second buffer
+                setTimeout(() => {
+                    if (this.isAudioPlaying) {
+                        console.log('Audio playback timeout reached, forcing cleanup');
+                        cleanupAudio();
+                        resolve();
+                    }
+                }, timeoutDuration);
             });
         } catch (error) {
             console.error('Error in speech response:', error);
@@ -798,26 +1166,160 @@ class FacialAnimationSystem {
             throw error;
         }
     }
+
+    // Add a button to reset the model to its original state
+    addResetModelButton() {
+        const container = document.getElementById('animation-container');
+        const button = document.createElement('button');
+        button.className = 'reset-button';
+        button.textContent = 'RESET MODEL';
+        
+        // Style the button
+        const style = document.createElement('style');
+        style.textContent = `
+            .reset-button {
+                position: fixed;
+                bottom: 150px;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 15px 30px;
+                background: #3F51B5;
+                color: white;
+                border: none;
+                border-radius: 30px;
+                cursor: pointer;
+                z-index: 999;
+                font-size: 20px;
+                font-weight: bold;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+                text-transform: uppercase;
+            }
+            .reset-button:hover {
+                background: #303F9F;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Reset the model when clicked
+        button.addEventListener('click', () => {
+            this.resetModelToOriginal();
+        });
+        
+        container.appendChild(button);
+    }
+    
+    // Reset the model to its original state without any morphs but keep original animation
+    resetModelToOriginal() {
+        if (!this.modelLoader || !this.morphTargetMesh) return;
+        
+        console.log('Resetting model to original state...');
+        
+        // Reset all morph targets to zero
+        if (this.morphTargetMesh.morphTargetInfluences) {
+            this.morphTargetMesh.morphTargetInfluences.fill(0);
+        }
+        
+        // Stop all animations
+        if (this.modelLoader.getMixer()) {
+            const mixer = this.modelLoader.getMixer();
+            
+            // Stop all non-avaturn animations
+            mixer.stopAllAction();
+            
+            // Restart the original avaturn animation
+            if (this.modelLoader.animations['avaturn_animation']) {
+                console.log('Restarting original avaturn_animation');
+                const action = mixer.clipAction(this.modelLoader.animations['avaturn_animation']);
+                action.setLoop(THREE.LoopRepeat);
+                action.play();
+            }
+        }
+        
+        // Reset any animation state
+        this.isAudioPlaying = false;
+        this.currentVisemeTimeline = null;
+        
+        // Reset camera to a good viewing position
+        this.camera.position.set(0, 1.6, 2.0);
+        this.camera.lookAt(0, 1.6, 0);
+        this.controls.target.set(0, 1.6, 0);
+        this.controls.update();
+        
+        console.log('Model reset to original state');
+    }
 }
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    // Add user interaction handler to activate audio
-    document.body.addEventListener('click', function() {
-        // Try to resume audio context if it exists but is suspended
-        if (window.chatbot && 
-            window.chatbot.facialAnimation && 
-            window.chatbot.facialAnimation.audioContext && 
-            window.chatbot.facialAnimation.audioContext.state === 'suspended') {
+    // Create a global helper to initialize audio
+    window.initAudio = async function() {
+        try {
+            console.log('Initializing audio system on user interaction');
             
-            console.log('User interaction detected - resuming audio context');
-            window.chatbot.facialAnimation.audioContext.resume().then(() => {
-                console.log('AudioContext resumed successfully');
-            }).catch(err => {
-                console.error('Failed to resume AudioContext:', err);
-            });
+            // Try to create and resume an audio context
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (AudioContext) {
+                const tempContext = new AudioContext();
+                if (tempContext.state === 'suspended') {
+                    await tempContext.resume();
+                }
+                
+                // Play a silent sound to unlock audio
+                const buffer = tempContext.createBuffer(1, 1, 22050);
+                const source = tempContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(tempContext.destination);
+                source.start(0);
+                
+                console.log('Audio system initialized successfully');
+            }
+            
+            // Also try to resume chatbot's audio context if it exists
+            if (window.chatbot && 
+                window.chatbot.facialAnimation && 
+                window.chatbot.facialAnimation.audioManager &&
+                window.chatbot.facialAnimation.audioManager.audioContext) {
+                
+                const audioContext = window.chatbot.facialAnimation.audioManager.audioContext;
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                    console.log('ChatBot AudioContext resumed');
+                }
+            }
+            
+            return true;
+        } catch (err) {
+            console.error('Error initializing audio system:', err);
+            return false;
         }
-    }, { once: true });
+    };
+    
+    // Add user interaction handler to activate audio
+    document.body.addEventListener('click', async function() {
+        // Initialize audio on first interaction
+        await window.initAudio();
+        
+        // Try to get microphone permissions early
+        if (window.chatbot && !window.chatbot.microphonePermissionChecked) {
+            window.chatbot.microphonePermissionChecked = true;
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Stop the tracks immediately - we just want the permission
+                stream.getTracks().forEach(track => track.stop());
+                console.log('Microphone permission granted on page interaction');
+            } catch (err) {
+                console.error('Could not get microphone permission:', err);
+                // We'll handle this when the user tries to record
+            }
+        }
+    });
+
+    // Add click listener to all buttons to ensure audio is initialized
+    document.addEventListener('click', async function(event) {
+        if (event.target.tagName === 'BUTTON') {
+            await window.initAudio();
+        }
+    });
 
     // Handle WebSocket connection errors gracefully
     window.addEventListener('error', function(event) {

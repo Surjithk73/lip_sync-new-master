@@ -1,7 +1,7 @@
 class ElevenLabsService {
     constructor() {
         // API configuration
-        this.API_KEY = 'sk_c72808fdd1d40fce30b45a25a1f6adaf04cdee9f12ad1c87'; // Replace with your API key
+        this.API_KEY = 'sk_9ad2b81887703c99443ddee5503769b89c0e8317f693f1f1'; // Updated API key
         this.BASE_URL = 'https://api.elevenlabs.io/v1';
         
         // Using Adam voice ID - Professional male voice

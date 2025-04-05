@@ -19,13 +19,53 @@ export class ModelLoader {
                 url,
                 (gltf) => {
                     const model = gltf.scene;
-                    this.setupModel(model);
+                    
+                    // Minimal setup to preserve original model appearance
+                    this.setupModelMaterials(model);
                     this.model = model;
                     
-                    // Check for animations in the GLTF file
+                    // Handle animations from the original GLB file
                     if (gltf.animations && gltf.animations.length > 0) {
                         console.log(`Model contains ${gltf.animations.length} animations`);
-                        this.setupModelAnimations(model, gltf.animations);
+                        
+                        // Create animation mixer if not already created
+                        if (!this.mixer) {
+                            this.mixer = new THREE.AnimationMixer(model);
+                            console.log('Created animation mixer for model');
+                        }
+                        
+                        // Store and play the original animations
+                        gltf.animations.forEach((clip, index) => {
+                            const name = clip.name || `animation_${index}`;
+                            this.animations[name] = clip;
+                            console.log(`Model animation "${name}" found with duration: ${clip.duration}s`);
+                            
+                            // Configure the animation for smooth looping
+                            const action = this.mixer.clipAction(clip);
+                            
+                            // Settings for natural animation
+                            action.setLoop(THREE.LoopRepeat);
+                            action.clampWhenFinished = false;
+                            
+                            // For Avaturn animations, ensure they play properly
+                            if (name === 'avaturn_animation') {
+                                // Make sure we don't crossfade with other animations
+                                action.weight = 1;
+                                
+                                // Reset animation time to start
+                                action.time = 0;
+                                
+                                // Ensure smooth looping for the animation
+                                action.timeScale = 1.0;
+                                
+                                // Slightly longer blend time for smoother transitions
+                                action.fadeIn(0.3);
+                            }
+                            
+                            // Play the animation
+                            action.play();
+                            console.log(`Playing model animation: ${name}`);
+                        });
                     }
                     
                     resolve(model);
@@ -40,29 +80,44 @@ export class ModelLoader {
             );
         });
     }
+    
+    // Only set up materials without modifying the model
+    setupModelMaterials(model) {
+        model.traverse((node) => {
+            if (node.isMesh) {
+                // Log all available morph target influences and dictionary
+                if (node.morphTargetDictionary) {
+                    console.log('Found mesh with morph targets:', node.name);
+                    console.log('Morph target dictionary:', node.morphTargetDictionary);
+                    console.log('Number of morph targets:', node.morphTargetInfluences.length);
+                }
 
-    // Setup animations that are included in the model
-    setupModelAnimations(model, animations) {
-        if (!animations || animations.length === 0) return;
-        
-        // Create animation mixer if not already created
-        if (!this.mixer) {
-            this.mixer = new THREE.AnimationMixer(model);
-            console.log('Created animation mixer for model');
-        }
-        
-        // Process each animation
-        animations.forEach((clip, index) => {
-            const name = clip.name || `animation_${index}`;
-            this.animations[name] = clip;
-            console.log(`Model animation "${name}" found with duration: ${clip.duration}s`);
-            
-            // Play the first animation by default if it's an idle animation
-            if (index === 0 || name.toLowerCase().includes('idle')) {
-                const action = this.mixer.clipAction(clip);
-                action.setLoop(THREE.LoopRepeat);
-                action.play();
-                console.log(`Playing model animation: ${name}`);
+                // Enable morph targets
+                if (node.morphTargetDictionary && node.morphTargetInfluences) {
+                    // Ensure all morph targets are initialized
+                    const morphTargetCount = Object.keys(node.morphTargetDictionary).length;
+                    if (node.morphTargetInfluences.length !== morphTargetCount) {
+                        node.morphTargetInfluences = new Float32Array(morphTargetCount);
+                    }
+                    node.morphTargetInfluences.fill(0);
+                }
+
+                // Setup materials with minimal modifications to preserve look
+                if (node.material) {
+                    // Only set properties that are necessary for proper rendering
+                    node.material.side = THREE.FrontSide; // Changed from DoubleSide to preserve original material
+                    
+                    // Only enable transparency if the material actually has transparent textures
+                    // Forcing transparency can cause rendering issues
+                    if (node.material.map && node.material.map.image) {
+                        const hasTransparency = node.material.map.image.data && 
+                            node.material.map.image.data.some(value => value === 0);
+                        node.material.transparent = hasTransparency;
+                    }
+                    
+                    // Ensure material is updated
+                    node.material.needsUpdate = true;
+                }
             }
         });
     }
@@ -205,179 +260,10 @@ export class ModelLoader {
         });
     }
     
-    // Create a simple default idle animation
+    // We don't want any default animation, but we need this for backward compatibility
     createDefaultIdleAnimation(model) {
-        console.log('Creating enhanced default idle animation');
-        
-        // Find target objects for animation
-        let headObject = null;
-        let neckObject = null;
-        let spineObject = null;
-        let targetMesh = null;
-        
-        // Collect all animated objects
-        model.traverse(node => {
-            // Save references to important bones
-            if (node.isBone) {
-                const name = node.name.toLowerCase();
-                if (name.includes('head')) {
-                    headObject = node;
-                    console.log('Found head bone:', node.name);
-                } else if (name.includes('neck')) {
-                    neckObject = node;
-                    console.log('Found neck bone:', node.name);
-                } else if (name.includes('spine')) {
-                    if (!spineObject || name.includes('spine1') || name.includes('spine2')) {
-                        spineObject = node;
-                        console.log('Found spine bone:', node.name);
-                    }
-                }
-            }
-            
-            // Also find a mesh for position animation fallback
-            if (!targetMesh && node.isMesh) {
-                targetMesh = node;
-            }
-        });
-        
-        // Create animation mixer if not already created
-        if (!this.mixer) {
-            this.mixer = new THREE.AnimationMixer(model);
-            console.log('Created animation mixer for model');
-        }
-        
-        // Create animation tracks
-        const tracks = [];
-        const duration = 4.0; // Longer animation for more natural movement
-        
-        // Create natural breathing animation by moving the spine slightly
-        if (spineObject) {
-            // Breathing track - subtle up and down movement with rotation
-            const breathingTimes = [0, duration/4, duration/2, 3*duration/4, duration];
-            const breathingPosValues = [
-                // Starting position
-                0, 0, 0,
-                // Breathe in
-                0, 0.005, 0,
-                // Hold breath
-                0, 0.01, 0,
-                // Breathe out
-                0, 0.005, 0,
-                // Back to start
-                0, 0, 0
-            ];
-            
-            // Add spine breathing animation
-            tracks.push(new THREE.KeyframeTrack(
-                `${spineObject.name}.position`,
-                breathingTimes,
-                breathingPosValues
-            ));
-            
-            // Subtle spine rotation for more natural movement
-            const breathingRotValues = [
-                // Start
-                0, 0, 0, 1,  
-                // Slight forward
-                0.005, 0, 0, 0.9998,
-                // Max forward
-                0.01, 0, 0, 0.9998,
-                // Back to slight
-                0.005, 0, 0, 0.9998,
-                // Return to start
-                0, 0, 0, 1
-            ];
-            
-            tracks.push(new THREE.KeyframeTrack(
-                `${spineObject.name}.quaternion`,
-                breathingTimes,
-                breathingRotValues
-            ));
-        }
-        
-        // Add subtle head movement if head bone exists
-        if (headObject) {
-            // Head movement track - looking around slightly
-            const headTimes = [0, duration/3, 2*duration/3, duration];
-            const headRotValues = [
-                // Start - neutral
-                0, 0, 0, 1,
-                // Look slightly right and down
-                0.01, -0.015, 0.005, 0.9998,
-                // Look slightly left and up
-                -0.01, 0.015, -0.005, 0.9998,
-                // Back to neutral
-                0, 0, 0, 1
-            ];
-            
-            tracks.push(new THREE.KeyframeTrack(
-                `${headObject.name}.quaternion`,
-                headTimes,
-                headRotValues
-            ));
-        }
-        
-        // Add neck movement if neck bone exists
-        if (neckObject) {
-            // Neck movement track - slight movement
-            const neckTimes = [0, duration/2, duration];
-            const neckRotValues = [
-                // Start position
-                0, 0, 0, 1,
-                // Subtle tilt
-                0.005, 0.008, 0, 0.9999,
-                // Back to start
-                0, 0, 0, 1
-            ];
-            
-            tracks.push(new THREE.KeyframeTrack(
-                `${neckObject.name}.quaternion`,
-                neckTimes,
-                neckRotValues
-            ));
-        }
-        
-        // If no bones were found, apply animation to the entire model as fallback
-        if (tracks.length === 0 && targetMesh) {
-            console.log('No bones found for animation, using mesh fallback');
-            
-            const meshTimes = [0, duration/2, duration];
-            const meshPosValues = [
-                // Initial position
-                0, 0, 0,
-                // Slight up movement
-                0, 0.01, 0,
-                // Back to initial
-                0, 0, 0
-            ];
-            
-            tracks.push(new THREE.KeyframeTrack(
-                `.position`,
-                meshTimes,
-                meshPosValues
-            ));
-        }
-        
-        // If we have valid tracks, create and play the animation
-        if (tracks.length > 0) {
-            // Create animation clip
-            const clip = new THREE.AnimationClip('EnhancedIdle', duration, tracks);
-            
-            // Store the animation
-            this.animations['EnhancedIdle'] = clip;
-            
-            // Play the animation with crossfade
-            const action = this.mixer.clipAction(clip);
-            action.setLoop(THREE.LoopRepeat);
-            action.clampWhenFinished = false;
-            action.play();
-            
-            console.log('Playing enhanced idle animation with', tracks.length, 'animation tracks');
-            return clip;
-        } else {
-            console.warn('Could not create any animation tracks');
-            return null;
-        }
+        console.log('Skipping default idle animation creation to preserve original model appearance');
+        return null;
     }
     
     setupAnimation(fbxModel, targetModel, animationName) {
@@ -597,14 +483,7 @@ export class ModelLoader {
             }
         });
 
-        // Center and scale the model
-        const box = new THREE.Box3().setFromObject(model);
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-
-        model.position.sub(center);
-        const scale = 2 / Math.max(size.x, size.y, size.z);
-        model.scale.multiplyScalar(scale);
+        // Removed centering and scaling to preserve original model proportions
     }
 
     // Find all meshes with morph targets
