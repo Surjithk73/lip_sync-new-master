@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Therapist Chatbot</title>
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="icon" type="image/x-icon" href="data:,">
+    <style>
+        #test-audio-button {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: #ff5722;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 1000;
+            font-weight: bold;
+        }
+        #volume-control {
+            position: fixed;
+            top: 70px;
+            right: 20px;
+            width: 150px;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="chat-container">
+            <div id="animation-container"></div>
+            <div id="chat-interface">
+                <div id="chat-messages"></div>
+                <div id="chat-input-area">
+                    <button id="recordButton">
+                        <span class="record-icon"></span>
+                        Start Recording
+                    </button>
+                    <div id="recording-status">Click to start speaking</div>
+                </div>
+            </div>
+        </div>
+        <audio id="audioInput" preload="auto" controls></audio>
+    </div>
+    
+    <!-- Test audio button -->
+    <button id="test-audio-button">Test Audio</button>
+    <input id="volume-control" type="range" min="0" max="1" step="0.1" value="1">
+    
+    <script type="module" src="./src/main.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Test audio button functionality
+            const testButton = document.getElementById('test-audio-button');
+            const volumeControl = document.getElementById('volume-control');
+            const audioElement = document.getElementById('audioInput');
+            
+            // Create test audio - browser-generated tone
+            const testTone = function() {
+                // Try to resume AudioContext
+                if (window.chatbot && window.chatbot.facialAnimation && 
+                    window.chatbot.facialAnimation.audioManager) {
+                    window.chatbot.facialAnimation.audioManager.initialize();
+                }
+                
+                // Show audio controls for debugging
+                audioElement.controls = true;
+                
+                // Create a test audio file with a simple tone
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    const audioCtx = new AudioContext();
+                    const oscillator = audioCtx.createOscillator();
+                    const gainNode = audioCtx.createGain();
+                    
+                    // Configure oscillator
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(440, audioCtx.currentTime); // A4 note
+                    
+                    // Connect nodes
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+                    
+                    // Start sound
+                    oscillator.start();
+                    
+                    // Stop after 1 second
+                    setTimeout(() => {
+                        oscillator.stop();
+                        console.log('Test tone completed');
+                    }, 1000);
+                    
+                    console.log('Playing test tone');
+                } catch (e) {
+                    console.error('Failed to play test tone:', e);
+                    
+                    // Fallback to a normal audio file
+                    const dummyAudio = new Audio();
+                    dummyAudio.src = 'data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABMSVNUHAAAAElORk9JQ09QHwAAAENvcHlyaWdodACsAAAA';
+                    dummyAudio.play();
+                }
+            };
+            
+            testButton.addEventListener('click', testTone);
+            
+            // Volume control
+            volumeControl.addEventListener('input', function() {
+                if (window.chatbot && window.chatbot.facialAnimation && 
+                    window.chatbot.facialAnimation.audioManager) {
+                    window.chatbot.facialAnimation.audioManager.setVolume(this.value);
+                }
+                // Also set the audio element volume as fallback
+                audioElement.volume = this.value;
+            });
+        });
+    </script>
+</body>
+</html> 
