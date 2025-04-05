@@ -40,6 +40,27 @@ npm start
    - Surprise: Controls eye widening and eyebrow raising
    - Thoughtful: Controls subtle eye and eyebrow movements
 
+## VR Mode
+
+The application supports WebXR for viewing the 3D world in virtual reality:
+
+1. On mobile devices, access the application using HTTPS (run `npm run dev` and use the provided HTTPS URL)
+2. Click the "ENTER VR MODE" button at the bottom of the screen
+3. For mobile VR:
+   - Use with a compatible VR headset (Google Cardboard, Samsung Gear VR, etc.)
+   - Insert your phone into the headset after entering VR mode
+   - Look around to navigate the 3D environment
+   - Exit VR mode by tapping the screen (takes you back to normal viewing mode)
+4. For desktop VR:
+   - Requires a compatible WebXR headset (Oculus Quest, HTC Vive, etc.)
+   - Connect your VR headset to your computer
+   - Put on your headset after clicking the VR button
+   
+Note: VR mode requires:
+- A browser that supports WebXR (Chrome on Android, Safari on iOS 13+)
+- HTTPS connection (automatically configured in development mode)
+- A WebXR-compatible device
+
 ## Technical Details
 
 The system uses the following technologies:

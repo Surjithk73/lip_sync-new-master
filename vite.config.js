@@ -2,12 +2,12 @@ import { defineConfig } from 'vite';
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
-// import basicSsl from '@vitejs/plugin-basic-ssl';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 
 export default defineConfig({
     plugins: [
         react(),
-        // basicSsl(),
+        basicSsl(),
         VitePWA({
             registerType: 'autoUpdate',
             workbox: {
@@ -47,10 +47,10 @@ export default defineConfig({
             'Cross-Origin-Embedder-Policy': 'require-corp',
             'Feature-Policy': 'xr-spatial-tracking *'
         },
-        https: false
+        https: true
     },
     preview: {
-        https: false,
+        https: true,
         port: 3000,
         host: true,
         headers: {

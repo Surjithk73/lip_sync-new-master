@@ -11,13 +11,16 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 class ChatbotSystem {
     constructor() {
-        this.facialAnimation = new FacialAnimationSystem();
+        this.facialAnimation = new FacialAnimationSystem(this);
         this.ttsService = new ElevenLabsService();
         this.initSpeechRecognition();
         this.setupChatInterface();
         this.isRecording = false;
         this.processingResponse = false;
         this.microphonePermissionChecked = false;
+        
+        // Make chatbot system available globally for VR interaction
+        window.chatbotSystem = this;
     }
 
     initSpeechRecognition() {
@@ -678,10 +681,206 @@ Always prioritize the user's wellbeing, maintain appropriate boundaries, and enc
         
         this.addMessageToChat('ai', message.trim().replace(/\n\s+/g, ' ').replace(/\s\s+/g, ' '));
     }
+
+    // Add brightness adjustment controls for VR mode
+    addVRBrightnessControls() {
+        const container = document.getElementById('animation-container');
+        
+        // Create buttons container
+        const controlsContainer = document.createElement('div');
+        controlsContainer.id = 'vr-brightness-controls';
+        controlsContainer.style.position = 'fixed';
+        controlsContainer.style.top = '20px';
+        controlsContainer.style.right = '20px';
+        controlsContainer.style.zIndex = '1000';
+        controlsContainer.style.display = 'flex';
+        controlsContainer.style.flexDirection = 'column';
+        controlsContainer.style.gap = '10px';
+        
+        // Create brightness increase button
+        const increaseBtn = document.createElement('button');
+        increaseBtn.textContent = '🔆 Brighter';
+        increaseBtn.style.padding = '12px 20px';
+        increaseBtn.style.borderRadius = '20px';
+        increaseBtn.style.backgroundColor = '#ffcc80';
+        increaseBtn.style.color = '#333';
+        increaseBtn.style.border = 'none';
+        increaseBtn.style.cursor = 'pointer';
+        increaseBtn.style.fontWeight = 'bold';
+        increaseBtn.style.fontSize = '16px';
+        increaseBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+        
+        // Create brightness decrease button
+        const decreaseBtn = document.createElement('button');
+        decreaseBtn.textContent = '🔅 Dimmer';
+        decreaseBtn.style.padding = '12px 20px';
+        decreaseBtn.style.borderRadius = '20px';
+        decreaseBtn.style.backgroundColor = '#90caf9';
+        decreaseBtn.style.color = '#333';
+        decreaseBtn.style.border = 'none';
+        decreaseBtn.style.cursor = 'pointer';
+        decreaseBtn.style.fontWeight = 'bold';
+        decreaseBtn.style.fontSize = '16px';
+        decreaseBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+        
+        // Create reset brightness button
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = '↺ Reset';
+        resetBtn.style.padding = '12px 20px';
+        resetBtn.style.borderRadius = '20px';
+        resetBtn.style.backgroundColor = '#a5d6a7';
+        resetBtn.style.color = '#333';
+        resetBtn.style.border = 'none';
+        resetBtn.style.cursor = 'pointer';
+        resetBtn.style.fontWeight = 'bold';
+        resetBtn.style.fontSize = '16px';
+        resetBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+        
+        // Store current exposure value
+        let currentExposure = this.renderer.toneMappingExposure;
+        
+        // Add event listeners
+        increaseBtn.addEventListener('click', () => {
+            if (this.vrLights) {
+                // Increase spotlight intensity
+                this.vrLights[0].intensity += 0.5; // Increase front light
+                
+                // Increase exposure
+                this.renderer.toneMappingExposure += 0.2;
+                currentExposure = this.renderer.toneMappingExposure;
+                
+                console.log('Increased brightness - Exposure:', currentExposure, 'Light intensity:', this.vrLights[0].intensity);
+            }
+        });
+        
+        decreaseBtn.addEventListener('click', () => {
+            if (this.vrLights) {
+                // Decrease spotlight intensity but keep above minimum
+                this.vrLights[0].intensity = Math.max(1.0, this.vrLights[0].intensity - 0.5);
+                
+                // Decrease exposure but keep above minimum
+                this.renderer.toneMappingExposure = Math.max(1.0, this.renderer.toneMappingExposure - 0.2);
+                currentExposure = this.renderer.toneMappingExposure;
+                
+                console.log('Decreased brightness - Exposure:', currentExposure, 'Light intensity:', this.vrLights[0].intensity);
+            }
+        });
+        
+        resetBtn.addEventListener('click', () => {
+            if (this.vrLights) {
+                // Reset to duller default values
+                this.vrLights[0].intensity = 2.3; // Default front light intensity for duller appearance
+                this.renderer.toneMappingExposure = 1.5; // Default VR exposure for duller appearance
+                currentExposure = this.renderer.toneMappingExposure;
+                
+                console.log('Reset brightness to defaults - Exposure:', currentExposure, 'Light intensity:', this.vrLights[0].intensity);
+            }
+        });
+        
+        // Add buttons to container
+        controlsContainer.appendChild(increaseBtn);
+        controlsContainer.appendChild(decreaseBtn);
+        controlsContainer.appendChild(resetBtn);
+        
+        // Add container to the DOM
+        container.appendChild(controlsContainer);
+        
+        // Store reference to remove when exiting VR
+        this.brightnessControls = controlsContainer;
+        
+        // Hide initially if not in VR mode
+        if (!this.renderer.xr.isPresenting) {
+            controlsContainer.style.display = 'none';
+        }
+        
+        // Update visibility based on VR state
+        const updateVisibility = () => {
+            if (this.renderer.xr.isPresenting) {
+                controlsContainer.style.display = 'flex';
+            } else {
+                controlsContainer.style.display = 'none';
+            }
+        };
+        
+        // Monitor VR session state
+        const xrManager = this.renderer.xr;
+        if (xrManager) {
+            const checkVRState = () => {
+                updateVisibility();
+                requestAnimationFrame(checkVRState);
+            };
+            checkVRState();
+        }
+    }
+
+    // Reset character to original position when exiting VR
+    resetCharacterOrientation() {
+        // Try to find the character model
+        let characterModel = null;
+        
+        if (this.modelLoader && this.modelLoader.model) {
+            characterModel = this.modelLoader.model;
+        }
+        
+        if (!characterModel) {
+            this.scene.traverse(node => {
+                if (node.userData && node.userData.originalRotation) {
+                    characterModel = node;
+                }
+            });
+        }
+        
+        if (characterModel && characterModel.userData.originalRotation) {
+            // Restore original rotation and position
+            characterModel.rotation.copy(characterModel.userData.originalRotation);
+            characterModel.position.copy(characterModel.userData.originalPosition);
+            console.log('Character orientation reset to original');
+        }
+        
+        // Remove VR-specific lights
+        if (this.vrLights) {
+            this.vrLights.forEach(light => {
+                if (light) this.scene.remove(light);
+            });
+            this.vrLights = null;
+            
+            // Reset tone mapping to normal value for duller appearance
+            this.renderer.toneMappingExposure = 1.3;
+            
+            console.log('VR-specific lighting removed');
+        }
+        
+        // Clean up VR interaction elements
+        if (this.vrCameraHelper) {
+            this.scene.remove(this.vrCameraHelper);
+        }
+        
+        if (this.vrButtonGroup) {
+            this.scene.remove(this.vrButtonGroup);
+        }
+        
+        // Reset VR recording state
+        this.isVRRecording = false;
+        
+        // Remove brightness controls
+        if (this.brightnessControls) {
+            this.brightnessControls.remove();
+            this.brightnessControls = null;
+            console.log('VR brightness controls removed');
+        }
+    }
 }
 
 class FacialAnimationSystem {
-    constructor() {
+    constructor(chatbotInstance) {
+        this.chatbotInstance = chatbotInstance;
+        
+        // Initialize other properties
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.controls = null;
+        
         this.initScene();
         this.audioManager = new AudioManager();
         this.emotionalState = {
@@ -735,6 +934,9 @@ class FacialAnimationSystem {
             model.position.y = 0; // Ensure the model sits at the origin Y
             this.scene.add(model);
             
+            // Enhance the material properties for more realistic skin appearance
+            this.enhanceModelMaterials(model);
+            
             // Add a button to reset the model to its original state
             this.addResetModelButton();
             
@@ -758,6 +960,73 @@ class FacialAnimationSystem {
         } catch (error) {
             console.error('Failed to load facial model:', error);
         }
+    }
+    
+    // Enhance material properties for more realistic skin appearance
+    enhanceModelMaterials(model) {
+        if (!model) return;
+        
+        console.log('Enhancing model material properties for better skin appearance');
+        
+        model.traverse(node => {
+            if (node.isMesh && node.material) {
+                // Check if this is likely a skin material by examining name or color
+                const isSkinMaterial = 
+                    (node.material.name && /skin|face|head|body/i.test(node.material.name)) ||
+                    (node.material.color && 
+                     (node.material.color.r > 0.5 && 
+                      node.material.color.g > 0.3 && 
+                      node.material.color.g < node.material.color.r));
+                
+                if (isSkinMaterial) {
+                    console.log('Enhancing skin material:', node.material.name || 'unnamed');
+                    
+                    // Adjust skin tone to be slightly darker and more natural
+                    if (node.material.color) {
+                        // Create a slightly darker, naturally warm skin tone
+                        const color = node.material.color;
+                        // Reduce brightness while maintaining warmth
+                        color.r = Math.min(0.95, color.r * 1.15); // Less red but still warm
+                        color.g = Math.min(0.85, color.g * 1.05); // Less increase in green
+                        color.b = Math.min(0.75, color.b * 0.95); // Slightly lower blue for warmth
+                    }
+                    
+                    // Adjust material properties for duller appearance
+                    node.material.roughness = 0.85; // Higher roughness for duller, less glossy skin
+                    node.material.metalness = 0.08; // Lower metalness for more natural look
+                    
+                    // Reduce subsurface scattering for less translucent look
+                    if (node.material.transmission !== undefined) {
+                        node.material.transmission = 0.10; // Reduced translucency for duller appearance
+                    }
+                    
+                    // Reduce specular if available
+                    if (node.material.specular !== undefined) {
+                        // If the material has a specular component, reduce it
+                        if (node.material.specular.isColor) {
+                            node.material.specular.multiplyScalar(0.7); // Reduce specular by 30%
+                        }
+                    }
+                    
+                    // Other texture adjustments
+                    if (node.material.map) {
+                        node.material.map.encoding = THREE.SRGBColorSpace;
+                    }
+                } else if (node.material.name && /cloth|dress|shirt|pant|jacket/i.test(node.material.name)) {
+                    // Make clothing materials duller too
+                    node.material.roughness = Math.min(1.0, node.material.roughness * 1.2);
+                    node.material.metalness = Math.max(0.05, node.material.metalness * 0.8);
+                }
+                
+                // General material improvements
+                node.material.side = THREE.FrontSide; // Ensure proper rendering
+                node.material.needsUpdate = true;
+                
+                // Add shadow capabilities
+                node.castShadow = true;
+                node.receiveShadow = true;
+            }
+        });
     }
 
     async loadRoomModel(characterModel) {
@@ -926,14 +1195,19 @@ class FacialAnimationSystem {
         
         // Create new lighting setup appropriate for indoor scene
         
-        // Keep ambient light but adjust intensity
+        // Slightly reduce ambient light for more shadows and depth
         const ambientLight = this.scene.children.find(child => child instanceof THREE.AmbientLight);
         if (ambientLight) {
-            ambientLight.intensity = 0.5; // Keep this lower to not brighten the room too much
+            ambientLight.intensity = 0.6; // Reduced for more shadows and less shine
+            ambientLight.color.set(0xfffaf0); // Keep warm white for natural skin tones
+        } else {
+            // Create ambient light if not found
+            const newAmbient = new THREE.AmbientLight(0xfffaf0, 0.6);
+            this.scene.add(newAmbient);
         }
         
-        // Create main directional light (window light)
-        const mainLight = new THREE.DirectionalLight(0xffffff, 0.8); // Standard room lighting
+        // Create main directional light (window light) with warmer tone but reduced intensity
+        const mainLight = new THREE.DirectionalLight(0xfff0e0, 0.9); // Warmer light but slightly reduced intensity
         mainLight.position.set(10, 8, 5);
         mainLight.castShadow = true;
         
@@ -953,59 +1227,67 @@ class FacialAnimationSystem {
         
         this.scene.add(mainLight);
         
-        // Add some soft fill lights for the room
-        const fillLight1 = new THREE.PointLight(0xffffff, 0.4); // Keep the room lighting standard
+        // Add some soft fill lights for the room with warmer tones but reduced intensity
+        const fillLight1 = new THREE.PointLight(0xffe8d9, 0.5); // Warmer color but lower intensity
         fillLight1.position.set(-5, 5, -5);
+        fillLight1.decay = 1.7; // Higher decay for less spread
         this.scene.add(fillLight1);
         
-        const fillLight2 = new THREE.PointLight(0xffffff, 0.2); // Keep the room lighting standard
+        const fillLight2 = new THREE.PointLight(0xffeedd, 0.4); // Warm light, reduced intensity
         fillLight2.position.set(5, 2, -5);
+        fillLight2.decay = 1.7; // Higher decay for less spread
         this.scene.add(fillLight2);
         
-        // ======= CHARACTER-SPECIFIC LIGHTING - ENHANCED FOR BRIGHTNESS =======
+        // ======= CHARACTER-SPECIFIC LIGHTING - TUNED FOR NATURAL DULLER SKIN =======
         
-        // Primary character spotlight - significantly brighter
-        const characterSpotlight = new THREE.SpotLight(0xffffff, 1.5); // Increased intensity
+        // Primary character spotlight - warm tone but reduced intensity for duller appearance
+        const characterSpotlight = new THREE.SpotLight(0xffe3c8, 2.0); // Warm light color, reduced intensity
         characterSpotlight.position.set(0, 8, 5);
-        characterSpotlight.angle = Math.PI / 6;
-        characterSpotlight.penumbra = 0.5;
-        characterSpotlight.decay = 1.0; // Reduced decay for brighter illumination
-        characterSpotlight.distance = 20;
+        characterSpotlight.angle = Math.PI / 5; // Wider angle
+        characterSpotlight.penumbra = 0.7; // Softer edges
+        characterSpotlight.decay = 0.6; // Slightly higher decay for less intense light
+        characterSpotlight.distance = 25; // Maintain distance
         characterSpotlight.target.position.set(0, 1.5, 0); // Aim at character's upper body
         
-        // Only make the character receive this light by using layers
         characterSpotlight.castShadow = true;
         characterSpotlight.shadow.bias = -0.002; // Adjust shadow bias
         
         this.scene.add(characterSpotlight);
         this.scene.add(characterSpotlight.target);
         
-        // Add secondary front light for the character
-        const characterFrontLight = new THREE.SpotLight(0xffffff, 1.2);
+        // Add secondary front light for the character - warm but reduced intensity
+        const characterFrontLight = new THREE.SpotLight(0xffdfc4, 1.7); // Warm skin tone light, reduced intensity
         characterFrontLight.position.set(0, 1.8, 8); // Position in front
-        characterFrontLight.angle = Math.PI / 8;
-        characterFrontLight.penumbra = 0.7;
-        characterFrontLight.decay = 1.0;
-        characterFrontLight.distance = 15;
+        characterFrontLight.angle = Math.PI / 7;
+        characterFrontLight.penumbra = 0.8; // Softer edges
+        characterFrontLight.decay = 0.7; // Higher decay for less spread
+        characterFrontLight.distance = 20; // Maintain range
         characterFrontLight.target.position.set(0, 1.5, 0);
         this.scene.add(characterFrontLight);
         this.scene.add(characterFrontLight.target);
         
-        // Add fill light from below to remove any harsh shadows
-        const characterFillLight = new THREE.PointLight(0xfffff0, 0.7); // Slight warm tint
+        // Add fill light from below - reduced intensity
+        const characterFillLight = new THREE.PointLight(0xffe0c0, 0.9); // Warm bounce light, reduced intensity
         characterFillLight.position.set(0, 0.8, 4);
-        characterFillLight.distance = 8;
-        characterFillLight.decay = 1.5;
+        characterFillLight.distance = 10;
+        characterFillLight.decay = 1.2; // Higher decay
         this.scene.add(characterFillLight);
+        
+        // Add a subtle rim light behind character
+        const rimLight = new THREE.PointLight(0xfff6e9, 0.6); // Reduced intensity
+        rimLight.position.set(0, 1.6, -3); // Behind character
+        rimLight.decay = 1.3; // Higher decay
+        rimLight.distance = 10;
+        this.scene.add(rimLight);
         
         // Enable renderer shadows if they weren't already
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         
-        // Tone mapping for the overall scene - keep at moderate level
-        this.renderer.toneMappingExposure = 1.2; 
+        // Slightly reduce tone mapping exposure for duller appearance
+        this.renderer.toneMappingExposure = 1.3; // Reduced from 1.5
         
-        console.log('Room lighting updated with enhanced character-specific illumination');
+        console.log('Room lighting updated for duller, more natural skin appearance');
     }
 
     initializeMorphTargets() {
@@ -1110,40 +1392,194 @@ class FacialAnimationSystem {
                         width: 90%;
                     }
                 }
+                .vr-button-unavailable {
+                    background: #cccccc;
+                    color: #666666;
+                    cursor: not-allowed;
+                }
+                .vr-notice {
+                    position: fixed;
+                    bottom: 150px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: rgba(0,0,0,0.7);
+                    color: white;
+                    padding: 10px 15px;
+                    border-radius: 20px;
+                    font-size: 14px;
+                    max-width: 90%;
+                    text-align: center;
+                    z-index: 998;
+                    display: none;
+                }
             `;
             document.head.appendChild(style);
 
+            // Create notice element for XR status
+            const vrNotice = document.createElement('div');
+            vrNotice.className = 'vr-notice';
+            document.body.appendChild(vrNotice);
+            
+            // Check for WebXR support
+            const checkXRSupport = async () => {
+                if (!navigator.xr) {
+                    button.classList.add('vr-button-unavailable');
+                    button.textContent = 'VR NOT SUPPORTED';
+                    vrNotice.textContent = 'WebXR is not available in your browser.';
+                    vrNotice.style.display = 'block';
+                    setTimeout(() => {
+                        vrNotice.style.display = 'none';
+                    }, 5000);
+                    return false;
+                }
+                
+                try {
+                    // Check for 'immersive-vr' session support
+                    const isSupported = await navigator.xr.isSessionSupported('immersive-vr');
+                    if (!isSupported) {
+                        button.classList.add('vr-button-unavailable');
+                        button.textContent = 'VR NOT AVAILABLE';
+                        vrNotice.textContent = 'VR mode is not available on this device.';
+                        vrNotice.style.display = 'block';
+                        setTimeout(() => {
+                            vrNotice.style.display = 'none';
+                        }, 5000);
+                        return false;
+                    }
+                    
+                    return true;
+                } catch (error) {
+                    console.error('Error checking XR support:', error);
+                    button.classList.add('vr-button-unavailable');
+                    button.textContent = 'VR ERROR';
+                    return false;
+                }
+            };
+            
+            // Check support immediately
+            checkXRSupport();
+            
             // Handle VR session with specific configuration for mobile VR
             button.addEventListener('click', async () => {
                 try {
-                    if (navigator.xr) {
-                        const session = await navigator.xr.requestSession('immersive-vr', {
-                            optionalFeatures: [
-                                'local-floor',
-                                'bounded-floor',
-                                'hand-tracking',
-                                'layers'
-                            ]
-                        });
+                    // Make sure we're still supported
+                    const isSupported = await navigator.xr.isSessionSupported('immersive-vr');
+                    if (!isSupported) {
+                        alert('VR mode is not supported on this device or browser.');
+                        return;
+                    }
+                    
+                    if (this.renderer.xr.isPresenting) {
+                        // If already in VR, exit session
+                        this.renderer.xr.getSession().end();
+                        return;
+                    }
+                    
+                    // Request VR session with mobile-friendly options
+                    const session = await navigator.xr.requestSession('immersive-vr', {
+                        optionalFeatures: [
+                            'local-floor',
+                            'bounded-floor',
+                            'hand-tracking',
+                            'layers'
+                        ]
+                    });
+                    
+                    // Setup VR session
+                    await this.renderer.xr.setSession(session);
+                    
+                    // Position camera for VR to face the front of the character
+                    // Assuming the character model is at the origin facing -Z direction
+                    this.camera.position.set(0, 1.6, 3.0); // Move camera in front of the character
+                    this.camera.lookAt(0, 1.6, 0);
+                    
+                    // Ensure the character is oriented to face the VR camera
+                    this.orientCharacterForVR();
+                    
+                    // Add VR interaction elements (recording button and crosshair)
+                    this.addVRInteractionElements(this.modelLoader.model);
+                    
+                    // Add a one-time listener for the first XR frame to ensure correct positioning
+                    const onFirstXRFrame = () => {
+                        // Force the VR camera to be in front of the character
+                        const xrCamera = this.renderer.xr.getCamera();
+                        // Set the camera's world position
+                        xrCamera.position.set(0, 1.6, 3.0);
+                        xrCamera.lookAt(0, 1.6, 0);
                         
-                        await this.renderer.xr.setSession(session);
-                        
-                        // Position camera for VR using standard human height parameters
+                        // Remove the one-time listener
+                        this.renderer.xr.getSession().removeEventListener('inputsourceschange', onFirstXRFrame);
+                        console.log('VR camera positioned to face the character front');
+                    };
+                    
+                    session.addEventListener('inputsourceschange', onFirstXRFrame);
+                    
+                    button.textContent = 'EXIT VR';
+                    
+                    // Reset button when session ends
+                    session.addEventListener('end', () => {
+                        button.textContent = 'ENTER VR MODE';
+                        // Reset camera and controls for non-VR viewing
                         this.camera.position.set(0, 1.6, 2.0);
                         this.camera.lookAt(0, 1.6, 0);
+                        this.controls.target.set(0, 1.6, 0);
+                        this.controls.update();
                         
-                        button.textContent = 'Exit VR';
-                        
-                        session.addEventListener('end', () => {
-                            button.textContent = 'ENTER VR MODE';
-                            this.renderer.xr.setSession(null);
-                        });
-                    } else {
-                        alert('WebXR not available on your device. Please use a WebXR-compatible browser and VR headset.');
-                    }
+                        // Reset character orientation to original state
+                        this.resetCharacterOrientation();
+                    });
+                    
+                    // Mobile VR specific handler for orientation change
+                    window.addEventListener('orientationchange', () => {
+                        setTimeout(() => {
+                            if (this.renderer.xr.isPresenting) {
+                                const container = document.getElementById('animation-container');
+                                const aspect = container.clientWidth / container.clientHeight;
+                                this.camera.aspect = aspect;
+                                this.camera.updateProjectionMatrix();
+                                this.renderer.setSize(container.clientWidth, container.clientHeight);
+                                
+                                // Re-orient character when orientation changes
+                                this.orientCharacterForVR();
+                            }
+                        }, 200);
+                    });
+                    
+                    // Add VR brightness adjustment buttons
+                    this.addVRBrightnessControls();
+                    
+                    // Add double-tap to re-center functionality for mobile VR
+                    let lastTapTime = 0;
+                    const container = document.getElementById('animation-container');
+                    container.addEventListener('touchend', (event) => {
+                        if (this.renderer.xr.isPresenting) {
+                            const currentTime = new Date().getTime();
+                            const tapLength = currentTime - lastTapTime;
+                            
+                            if (tapLength < 500 && tapLength > 0) {
+                                // Double tap detected
+                                console.log('Double tap detected, re-orienting VR view');
+                                // Re-orient camera to face character
+                                const xrCamera = this.renderer.xr.getCamera();
+                                xrCamera.position.set(0, 1.6, 3.0);
+                                xrCamera.lookAt(0, 1.6, 0);
+                                
+                                // Re-orient character
+                                this.orientCharacterForVR();
+                                
+                                event.preventDefault();
+                            }
+                            lastTapTime = currentTime;
+                        }
+                    });
+                    
                 } catch (error) {
                     console.error('VR initialization error:', error);
-                    alert('Unable to enter VR. Make sure you have a compatible VR viewer and are using HTTPS.');
+                    vrNotice.textContent = 'Error entering VR: ' + (error.message || 'Unknown error');
+                    vrNotice.style.display = 'block';
+                    setTimeout(() => {
+                        vrNotice.style.display = 'none';
+                    }, 5000);
                 }
             });
 
@@ -1215,7 +1651,7 @@ class FacialAnimationSystem {
         // Set up the animation loop with XR support
         this.clock = new THREE.Clock();
 
-        // Animation loop with VR support
+        // Animation loop with enhanced VR support
         const animate = () => {
             this.renderer.setAnimationLoop(() => {
                 const delta = this.clock.getDelta();
@@ -1229,24 +1665,15 @@ class FacialAnimationSystem {
                 // Update controls only in non-VR mode
                 if (!this.renderer.xr.isPresenting) {
                     this.controls.update();
+                } else {
+                    // In VR mode, handle any additional VR-specific updates
+                    this.handleVRUpdates();
                 }
                 
                 // Update morph targets based on animation state
-                if (this.morphTargetMesh) {
-                    if (this.isAudioPlaying) {
-                        this.updateMorphTargets();
-                    } else if (this.transitionToRestingFace) {
-                        // Apply transition to resting face
-                        this.applyRestingFaceTransition();
-                    } else {
-                        // Ensure morphs are zeroed out
-                        this.morphTargetMesh.morphTargetInfluences.fill(0);
-                        // Apply eye movements in non-speaking state
-                        this.applyEyeMovements();
-                    }
-                }
+                this.updateMorphTargets();
                 
-                // Render scene
+                // Render the scene
                 this.renderer.render(this.scene, this.camera);
             });
         };
@@ -1255,27 +1682,20 @@ class FacialAnimationSystem {
     }
 
     updateMorphTargets() {
-        if (!this.morphTargetMesh) return;
-
-        // When not speaking, ensure morph targets are reset
-        if (!this.isAudioPlaying || !this.currentVisemeTimeline) {
-            // This is a safety check - if we're not speaking but the method was called,
-            // ensure all morphs are zeroed out and start transition if needed
-            if (!this.transitionToRestingFace) {
-                this.transitionToRestingFace = true;
-                this.transitionStartTime = null;
+        if (this.morphTargetMesh) {
+            if (this.isAudioPlaying) {
+                // Apply phoneme-based lip sync animation 
+                this.applyPhonemeLipSync();
+            } else if (this.transitionToRestingFace) {
+                // Apply transition to resting face
+                this.applyRestingFaceTransition();
+            } else {
+                // Ensure morphs are zeroed out
+                this.morphTargetMesh.morphTargetInfluences.fill(0);
+                // Apply eye movements in non-speaking state
+                this.applyEyeMovements();
             }
-            return;
         }
-
-        // Reset all morph target influences
-        this.morphTargetMesh.morphTargetInfluences.fill(0);
-        
-        // Apply minimal eye movements when speaking
-        this.applyEyeMovements();
-        
-        // Apply phoneme-based lip sync
-        this.applyPhonemeLipSync();
     }
 
     applyMorphTarget(name, value) {
@@ -1790,6 +2210,419 @@ class FacialAnimationSystem {
         this.controls.update();
         
         console.log('Model reset to original state');
+    }
+
+    // Handle VR-specific updates and controller interaction
+    handleVRUpdates() {
+        // Get XR session
+        const session = this.renderer.xr.getSession();
+        if (!session) return;
+        
+        // Get XR reference space (for controller tracking)
+        const referenceSpace = this.renderer.xr.getReferenceSpace();
+        if (!referenceSpace) return;
+        
+        try {
+            // Update VR interactions (gaze-based, recording button)
+            this.updateVRInteractions();
+            
+            // Handle mobile touchscreen VR control
+            if (window.DeviceOrientationEvent && this.renderer.xr.isPresenting) {
+                // Mobile VR is active - automatic orientation will be used by WebXR
+            }
+            
+            // XR input sources (controllers)
+            const inputSources = session.inputSources;
+            if (inputSources) {
+                // Handle input sources (controllers or touch events) if available
+                for (let source of inputSources) {
+                    if (source.handedness) {
+                        // Handle controller input if present
+                        // (Add specific controller handling code if needed)
+                    }
+                    
+                    // Handle selectstart event (for gaze-based selection)
+                    if (source.targetRayMode === 'gaze') {
+                        // Gaze-based interactions are handled in updateVRInteractions
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error in VR update loop:', error);
+        }
+    }
+
+    // Ensure the character is oriented properly for VR viewing
+    orientCharacterForVR() {
+        // Find the character model - it should be the main model loaded
+        // Try multiple methods to locate the character
+        let characterModel = null;
+        
+        // Method 1: Find by model specific attributes
+        if (this.modelLoader && this.modelLoader.model) {
+            characterModel = this.modelLoader.model;
+            console.log('Found character model via modelLoader');
+        }
+        
+        // Method 2: Try to find by traversing the scene
+        if (!characterModel) {
+            this.scene.traverse(node => {
+                // Check if this is likely the character model
+                if (node.isMesh && node.morphTargetInfluences && node.morphTargetInfluences.length > 0) {
+                    // Found a mesh with morph targets - likely part of the character
+                    characterModel = node.parent;
+                    while (characterModel && characterModel.parent !== this.scene) {
+                        characterModel = characterModel.parent; // Go up to the top level
+                    }
+                    
+                    if (characterModel) {
+                        console.log('Found character model via morph target search');
+                    }
+                }
+            });
+        }
+        
+        // Method 3: Find by elimination (not the room, not a light, not a camera)
+        if (!characterModel) {
+            characterModel = this.scene.children.find(child => 
+                child.type === 'Group' && 
+                child !== this.scene.children.find(c => c.name && c.name.toLowerCase().includes('room')) &&
+                !(child.isLight || child.isCamera)
+            );
+            
+            if (characterModel) {
+                console.log('Found character model via elimination');
+            }
+        }
+        
+        if (characterModel) {
+            // Store the original position and rotation before modifying
+            if (!characterModel.userData.originalPosition) {
+                characterModel.userData.originalPosition = characterModel.position.clone();
+                characterModel.userData.originalRotation = characterModel.rotation.clone();
+            }
+            
+            // Make sure the character is facing the camera in VR
+            // The model likely faces +Z, but in our VR setup we want it to face -Z (toward the camera)
+            characterModel.rotation.y = Math.PI; // Rotate 180 degrees
+            
+            // Optionally adjust position if needed (depends on model orientation)
+            // characterModel.position.z = 0; // Center model at z=0 for better VR positioning
+            
+            console.log('Character oriented to face VR camera');
+            
+            // Apply enhanced lighting for VR
+            this.enhanceVRLighting(characterModel);
+        } else {
+            console.warn('Could not find character model to orient for VR');
+        }
+    }
+    
+    // Add special lighting for VR mode to ensure character is well-lit
+    enhanceVRLighting(characterModel) {
+        // First, adjust exposure for VR - less bright for duller appearance
+        this.renderer.toneMappingExposure = 1.5; // Reduced exposure for duller appearance
+        
+        // Create a dedicated VR front light with warm but not overly bright tone
+        const vrFrontLight = new THREE.SpotLight(0xffebd7, 2.3); // Warm light but reduced intensity
+        vrFrontLight.position.set(0, 1.8, 5); // Position in front of character
+        vrFrontLight.target.position.set(0, 1.6, 0); // Target character face/upper body
+        vrFrontLight.angle = Math.PI / 4.5; // Slightly narrower angle
+        vrFrontLight.penumbra = 0.8; // Soft edges
+        vrFrontLight.decay = 0.5; // Moderate decay
+        vrFrontLight.distance = 25; // Good range
+        
+        // Add these lights to the scene
+        this.scene.add(vrFrontLight);
+        this.scene.add(vrFrontLight.target);
+        
+        // Create an additional fill light from below for VR
+        const vrFillLight = new THREE.PointLight(0xfff2e6, 1.1); // Warm fill light, reduced intensity
+        vrFillLight.position.set(0, 0.5, 3); // Below and in front
+        vrFillLight.decay = 0.8; // Moderate decay
+        vrFillLight.distance = 12; // Moderate range
+        this.scene.add(vrFillLight);
+        
+        // Add a gentle ambient light for more even, softer illumination
+        const vrAmbientLight = new THREE.AmbientLight(0xfff5eb, 0.3);
+        this.scene.add(vrAmbientLight);
+        
+        // Store references to remove these lights when exiting VR
+        this.vrLights = [vrFrontLight, vrFrontLight.target, vrFillLight, vrAmbientLight];
+        
+        console.log('Enhanced VR-specific lighting applied for duller, natural skin appearance');
+        
+        // Add VR interaction elements (recording button and crosshair)
+        this.addVRInteractionElements(characterModel);
+    }
+    
+    // Add VR interaction elements including a 3D button and gaze-based interaction
+    addVRInteractionElements(characterModel) {
+        // Create a crosshair/reticle for gaze interaction
+        this.createVRCrosshair();
+        
+        // Create a 3D "Start Recording" button in the VR world
+        this.createVRRecordingButton(characterModel);
+        
+        // Initialize variables for tracking gaze interaction
+        this.gazeTarget = null;
+        this.gazeStartTime = 0;
+        this.gazeThreshold = 2000; // 2 seconds of hovering to activate button
+        this.isVRRecording = false; // Track recording state
+    }
+    
+    // Create a crosshair/reticle for gaze-based interaction in VR
+    createVRCrosshair() {
+        // Create a simple crosshair geometry
+        const crosshairGeometry = new THREE.RingGeometry(0.02, 0.03, 32);
+        const crosshairMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            opacity: 0.5,
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+        
+        // Create crosshair mesh
+        this.crosshair = new THREE.Mesh(crosshairGeometry, crosshairMaterial);
+        this.crosshair.position.z = -0.5; // Position in front of camera
+        this.crosshair.visible = false; // Hide initially
+        
+        // Create inner dot for the crosshair
+        const dotGeometry = new THREE.CircleGeometry(0.005, 32);
+        const dotMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            opacity: 0.8,
+            transparent: true
+        });
+        
+        this.crosshairDot = new THREE.Mesh(dotGeometry, dotMaterial);
+        this.crosshairDot.position.z = -0.49; // Slightly in front of the ring
+        this.crosshairDot.visible = false; // Hide initially
+        
+        // Create a progress indicator for gaze activation
+        const progressGeometry = new THREE.RingGeometry(0.02, 0.03, 32, 1, 0, 0);
+        const progressMaterial = new THREE.MeshBasicMaterial({
+            color: 0x4CAF50,
+            opacity: 0.8,
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+        
+        this.gazeProgress = new THREE.Mesh(progressGeometry, progressMaterial);
+        this.gazeProgress.position.z = -0.48; // Slightly in front of everything
+        this.gazeProgress.visible = false; // Hide initially
+        
+        // Create a camera helper object to hold the crosshair elements
+        this.vrCameraHelper = new THREE.Group();
+        this.vrCameraHelper.add(this.crosshair);
+        this.vrCameraHelper.add(this.crosshairDot);
+        this.vrCameraHelper.add(this.gazeProgress);
+        
+        // Add to scene - will be updated each frame to follow camera
+        this.scene.add(this.vrCameraHelper);
+        
+        console.log('VR crosshair created for gaze interaction');
+    }
+    
+    // Create a 3D "Start Recording" button in the VR world
+    createVRRecordingButton(characterModel) {
+        // Determine position - beside the character
+        let buttonPosition = new THREE.Vector3(1.0, 1.6, 0.5);
+        
+        // If character model is available, position relative to it
+        if (characterModel) {
+            characterModel.updateWorldMatrix(true, false);
+            const characterBox = new THREE.Box3().setFromObject(characterModel);
+            const characterCenter = characterBox.getCenter(new THREE.Vector3());
+            const characterSize = characterBox.getSize(new THREE.Vector3());
+            
+            // Position to the right of the character
+            buttonPosition.set(
+                characterCenter.x + characterSize.x * 0.6, // Right side
+                characterCenter.y + characterSize.y * 0.1, // Near head height
+                characterCenter.z + characterSize.z * 0.3  // Slightly in front
+            );
+        }
+        
+        // Create the button shape
+        const buttonGeometry = new THREE.BoxGeometry(0.2, 0.1, 0.05);
+        const buttonMaterial = new THREE.MeshStandardMaterial({
+            color: 0xE53935, // Red color for recording button
+            roughness: 0.7,
+            metalness: 0.2,
+            emissive: 0x330000 // Slight emissive glow
+        });
+        
+        this.vrRecordButton = new THREE.Mesh(buttonGeometry, buttonMaterial);
+        this.vrRecordButton.position.copy(buttonPosition);
+        
+        // Create a simple label for the button since TextGeometry may not be readily available
+        const labelGeometry = new THREE.PlaneGeometry(0.16, 0.06);
+        const labelCanvas = document.createElement('canvas');
+        labelCanvas.width = 256;
+        labelCanvas.height = 128;
+        const labelContext = labelCanvas.getContext('2d');
+        labelContext.fillStyle = '#E53935';
+        labelContext.fillRect(0, 0, 256, 128);
+        labelContext.fillStyle = 'white';
+        labelContext.font = 'bold 64px Arial';
+        labelContext.textAlign = 'center';
+        labelContext.textBaseline = 'middle';
+        labelContext.fillText('REC', 128, 64);
+        
+        const labelTexture = new THREE.CanvasTexture(labelCanvas);
+        const labelMaterial = new THREE.MeshBasicMaterial({
+            map: labelTexture,
+            transparent: true
+        });
+        
+        this.buttonLabel = new THREE.Mesh(labelGeometry, labelMaterial);
+        this.buttonLabel.position.copy(buttonPosition).add(new THREE.Vector3(0, 0, 0.026));
+        
+        // Create an icon for the button (record circle)
+        const iconGeometry = new THREE.CircleGeometry(0.025, 32);
+        const iconMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        this.recordIcon = new THREE.Mesh(iconGeometry, iconMaterial);
+        this.recordIcon.position.copy(buttonPosition).add(new THREE.Vector3(-0.07, 0, 0.028));
+        
+        // Create button group
+        this.vrButtonGroup = new THREE.Group();
+        this.vrButtonGroup.add(this.vrRecordButton);
+        this.vrButtonGroup.add(this.buttonLabel);
+        this.vrButtonGroup.add(this.recordIcon);
+        
+        // Add to scene
+        this.scene.add(this.vrButtonGroup);
+        
+        // Make button interactable
+        this.vrRecordButton.userData.isInteractable = true;
+        this.vrRecordButton.userData.hoverTime = 0;
+        this.vrRecordButton.userData.name = 'recordButton';
+        
+        console.log('VR Recording button added to scene');
+    }
+    
+    // Update VR interactions each frame
+    updateVRInteractions() {
+        if (!this.renderer.xr.isPresenting || !this.vrCameraHelper || !this.vrRecordButton) return;
+        
+        // Get the VR camera
+        const xrCamera = this.renderer.xr.getCamera();
+        if (!xrCamera) return;
+        
+        // Position the crosshair in front of the camera
+        this.vrCameraHelper.position.copy(xrCamera.position);
+        this.vrCameraHelper.quaternion.copy(xrCamera.quaternion);
+        
+        // Raycasting for gaze interaction
+        const raycaster = new THREE.Raycaster();
+        const cameraDirection = new THREE.Vector3(0, 0, -1);
+        cameraDirection.applyQuaternion(xrCamera.quaternion);
+        
+        raycaster.set(xrCamera.position, cameraDirection);
+        
+        // Check if we're looking at interactable objects
+        const intersects = raycaster.intersectObject(this.vrRecordButton, false);
+        
+        // Update crosshair visibility
+        this.crosshair.visible = true;
+        this.crosshairDot.visible = true;
+        
+        const currentTime = performance.now();
+        
+        if (intersects.length > 0) {
+            // We're looking at the button
+            this.crosshair.material.color.set(0x4CAF50); // Green when hovering
+            this.crosshairDot.material.color.set(0x4CAF50);
+            
+            if (!this.gazeTarget) {
+                // Just started looking at the button
+                this.gazeTarget = intersects[0].object;
+                this.gazeStartTime = currentTime;
+                this.gazeProgress.visible = true;
+            } else {
+                // Continue looking at the button
+                const gazeDuration = currentTime - this.gazeStartTime;
+                
+                // Update progress indicator
+                const progressAngle = Math.min(1, gazeDuration / this.gazeThreshold) * Math.PI * 2;
+                this.gazeProgress.geometry.dispose(); // Clean up old geometry
+                this.gazeProgress.geometry = new THREE.RingGeometry(0.02, 0.03, 32, 1, 0, progressAngle);
+                
+                // Check if we've looked long enough to activate
+                if (gazeDuration >= this.gazeThreshold) {
+                    // Reset the gaze timer
+                    this.gazeStartTime = currentTime;
+                    this.gazeProgress.visible = false;
+                    
+                    // Toggle recording
+                    this.toggleVRRecording();
+                }
+            }
+        } else {
+            // Not looking at any interactable object
+            this.crosshair.material.color.set(0xffffff); // White when not hovering
+            this.crosshairDot.material.color.set(0xffffff);
+            this.gazeTarget = null;
+            this.gazeProgress.visible = false;
+        }
+    }
+    
+    // Toggle recording state in VR
+    toggleVRRecording() {
+        console.log('Toggling VR recording state');
+        
+        if (!this.isVRRecording) {
+            // Start recording
+            this.isVRRecording = true;
+            
+            // Update button appearance for recording state
+            this.vrRecordButton.material.color.set(0xFF1744); // Brighter red
+            this.vrRecordButton.material.emissive.set(0x550000); // Stronger emissive
+            
+            // Trigger the actual recording start through the chatbot system
+            this.startVRRecording();
+        } else {
+            // Stop recording
+            this.isVRRecording = false;
+            
+            // Update button appearance for non-recording state
+            this.vrRecordButton.material.color.set(0xE53935); // Regular red
+            this.vrRecordButton.material.emissive.set(0x330000); // Normal emissive
+            
+            // Trigger the actual recording stop
+            this.stopVRRecording();
+        }
+    }
+    
+    // Start recording in VR mode
+    startVRRecording() {
+        console.log('Starting VR voice recording');
+        
+        // Try to find chatbot system through different methods
+        const chatbotSystem = this.chatbotInstance || window.chatbotSystem;
+        
+        if (chatbotSystem && typeof chatbotSystem.startRecording === 'function') {
+            // Use the existing startRecording function from chatbot
+            chatbotSystem.startRecording();
+        } else {
+            console.error('Could not find chatbot system for recording');
+        }
+    }
+    
+    // Stop recording in VR mode
+    stopVRRecording() {
+        console.log('Stopping VR voice recording');
+        
+        // Try to find chatbot system through different methods
+        const chatbotSystem = this.chatbotInstance || window.chatbotSystem;
+        
+        if (chatbotSystem && typeof chatbotSystem.stopRecording === 'function') {
+            // Use the existing stopRecording function from chatbot
+            chatbotSystem.stopRecording();
+        } else {
+            console.error('Could not find chatbot system for recording');
+        }
     }
 }
 
