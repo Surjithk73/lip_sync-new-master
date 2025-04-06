@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import fs from 'fs';
 // import basicSsl from '@vitejs/plugin-basic-ssl';
 
 export default defineConfig({
@@ -11,7 +12,8 @@ export default defineConfig({
         VitePWA({
             registerType: 'autoUpdate',
             workbox: {
-                globPatterns: ['**/*.{js,css,html,ico,png,svg,json,vue,txt,woff2}']
+                globPatterns: ['**/*.{js,css,html,ico,png,svg,json,vue,txt,woff2}'],
+                maximumFileSizeToCacheInBytes: 3 * 1024 * 1024 // 3 MB limit
             },
             includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
             manifest: {
@@ -47,10 +49,16 @@ export default defineConfig({
             'Cross-Origin-Embedder-Policy': 'require-corp',
             'Feature-Policy': 'xr-spatial-tracking *'
         },
-        https: false
+        https: {
+            key: fs.readFileSync('server.key'),
+            cert: fs.readFileSync('server.crt')
+        }
     },
     preview: {
-        https: false,
+        https: {
+            key: fs.readFileSync('server.key'),
+            cert: fs.readFileSync('server.crt')
+        },
         port: 3000,
         host: true,
         headers: {
@@ -63,19 +71,32 @@ export default defineConfig({
         outDir: 'dist',
         assetsDir: 'assets',
         sourcemap: true,
+        chunkSizeWarningLimit: 2200, // Increased warning limit for chunks
         rollupOptions: {
             input: {
                 main: path.resolve(__dirname, 'index.html')
             },
             output: {
                 manualChunks: {
-                    vendor: ['react', 'react-dom']
+                    vendor: ['react', 'react-dom'],
+                    three: ['three', 'three/examples/jsm/loaders/GLTFLoader', 'three/examples/jsm/controls/OrbitControls'],
+                    tone: ['tone'],
+                    services: [
+                        './src/services/elevenLabsService',
+                        './src/services/phonemeLipSyncService',
+                        './src/services/audioManager'
+                    ]
                 }
             }
         }
     },
     optimizeDeps: {
-        include: ['three', 'tone']
+        include: [
+            'three',
+            'three/examples/jsm/loaders/GLTFLoader',
+            'three/examples/jsm/controls/OrbitControls',
+            'tone'
+        ]
     },
     resolve: {
         alias: {

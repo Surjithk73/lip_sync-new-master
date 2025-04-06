@@ -8,273 +8,171 @@ import ElevenLabsService from './services/elevenLabsService';
 import PhonemeLipSyncService from './services/phonemeLipSyncService';
 import AudioManager from './services/audioManager';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import * as VRInitializer from './vr-initializer';
 
 class ChatbotSystem {
     constructor() {
-        this.facialAnimation = new FacialAnimationSystem();
-        this.ttsService = new ElevenLabsService();
-        this.initSpeechRecognition();
-        this.setupChatInterface();
+        // State variables
         this.isRecording = false;
         this.processingResponse = false;
-        this.microphonePermissionChecked = false;
-    }
-
-    initSpeechRecognition() {
-        if (!('webkitSpeechRecognition' in window)) {
-            console.error('Speech recognition not supported in this browser');
-            this.addMessageToChat('ai', 'Speech recognition is not supported in this browser. Please try using Chrome or Edge.');
-            this.showFallbackExplanation();
-            this.offerTextInputAlternative();
-            return;
-        }
-
-        // Check for microphone permissions first
-        this.checkMicrophonePermission();
-        
-        // Track network status with more aggressive checking
-        this.isOnline = navigator.onLine;
         this.networkErrorCount = 0;
         
-        window.addEventListener('online', () => {
-            this.isOnline = true;
-            this.networkErrorCount = 0;
-            this.addMessageToChat('ai', 'Network connection restored. Speech recognition is now available.');
-        });
+        // Initialize core systems
+        this.facialAnimation = new FacialAnimationSystem();
         
-        window.addEventListener('offline', () => {
-            this.isOnline = false;
-            if (this.isRecording) {
-                this.stopRecording();
-                this.addMessageToChat('ai', 'Network connection lost. Speech recognition paused.');
-                this.offerTextInputAlternative();
-            }
-        });
-
-        // Test network connectivity to speech servers
-        this.testNetworkConnectivity();
-
-        this.recognition = new webkitSpeechRecognition();
-        this.recognition.continuous = false;
-        this.recognition.interimResults = true;
-        this.recognition.lang = 'en-US';
+        // Set up the chat interface when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                this.initialize();
+                this.setupChatInterface();
+            });
+        } else {
+            this.initialize();
+            this.setupChatInterface();
+        }
         
-        // Configure for better reliability
-        this.recognition.maxAlternatives = 3;
+        // Make the chatbot accessible globally for debugging
+        window.chatbot = this;
+    }
 
-        this.recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            this.addMessageToChat('user', transcript);
-            if (event.results[0].isFinal) {
-                this.generateResponse(transcript);
-            }
-        };
-
-        this.recognition.onend = () => {
-            if (this.isRecording && !this.processingResponse) {
-                // Check if we're online before restarting
-                if (this.isOnline && this.networkErrorCount < 3) {
-                    // Add small delay before restarting to avoid rapid restarts
-                    setTimeout(() => {
-                        try {
-                            this.recognition.start();
-                            console.log('Speech recognition restarted');
-                        } catch (error) {
-                            console.error('Error restarting speech recognition:', error);
-                            this.updateRecordingUI(false);
-                            this.isRecording = false;
-                            this.offerTextInputAlternative();
-                        }
-                    }, 300);
-                } else {
-                    console.log('Not restarting speech recognition due to network issues');
-                    this.updateRecordingUI(false);
-                    this.isRecording = false;
-                    if (this.networkErrorCount >= 3) {
-                        this.addMessageToChat('ai', 'Speech recognition has been disabled due to repeated network errors.');
-                        this.showFallbackExplanation();
-                        this.offerTextInputAlternative();
-                    }
-                }
-            } else {
-                this.updateRecordingUI(false);
-            }
-        };
-
-        this.recognition.onerror = (event) => {
-            console.error('Speech recognition error:', event.error);
-            
-            // Handle specific error types
-            switch (event.error) {
-                case 'not-allowed':
-                case 'permission-denied':
-                    this.addMessageToChat('ai', 'Microphone access was denied. Please allow microphone access to use speech recognition.');
-                    this.updateRecordingUI(false);
-                    this.offerTextInputAlternative();
-                    break;
-                case 'no-speech':
-                    this.addMessageToChat('ai', 'No speech was detected. Please try speaking again.');
-                    break;
-                case 'network':
-                    this.networkErrorCount++;
-                    // Check actual network connectivity
-                    if (!navigator.onLine) {
-                        this.addMessageToChat('ai', 'Your device appears to be offline. Please check your internet connection.');
-                    } else {
-                        if (this.networkErrorCount === 1) {
-                            this.addMessageToChat('ai', 'Network error connecting to speech recognition service. Trying once more...');
-                        } else {
-                            this.showNetworkErrorExplanation();
-                            this.isOnline = false; // Disable further attempts
-                            this.stopRecording();
-                        }
-                        
-                        // Always offer text input on network errors
-                        this.offerTextInputAlternative();
-                    }
-                    break;
-                case 'aborted':
-                    console.log('Speech recognition aborted');
-                    break;
-                default:
-                    this.addMessageToChat('ai', 'An error occurred with speech recognition. Please try again or use text input.');
-                    this.offerTextInputAlternative();
-            }
-            
-            if (event.error !== 'no-speech' && event.error !== 'aborted') {
-                this.updateRecordingUI(false);
-                if (this.isRecording && event.error === 'network' && this.networkErrorCount >= 2) {
-                    this.isRecording = false;
-                }
-            }
-        };
+    async initialize() {
+        try {
+            await this.facialAnimation.initialize();
+            console.log('ChatbotSystem initialized');
+        } catch (error) {
+            console.error('Failed to initialize ChatbotSystem:', error);
+        }
     }
 
     setupChatInterface() {
+        this.chatMessages = document.getElementById('chat-messages');
+        this.inputArea = document.getElementById('chat-input-area');
+        
+        // Reference pre-created text input
+        this.textInputContainer = document.getElementById('text-input-alternative');
+        this.textInput = document.getElementById('text-input-field');
+        this.textInputButton = document.getElementById('text-input-button');
+        
+        // Setup record button
         this.recordButton = document.getElementById('recordButton');
         this.recordingStatus = document.getElementById('recording-status');
-        this.chatMessages = document.getElementById('chat-messages');
-        this.currentMessage = null;
 
-        this.recordButton.addEventListener('click', () => {
-            if (!this.isRecording) {
-                this.startRecording();
-            } else {
-                this.stopRecording();
-            }
-        });
+        if (this.recordButton) {
+            this.recordButton.addEventListener('click', () => this.toggleRecording());
+        }
         
-        // Add a welcome message
-        this.addWelcomeMessage();
+        // Don't create the text input elements again as they're already in the HTML
+        console.log('Chat interface setup completed');
         
-        // Initialize text input alternative immediately
-        this.offerTextInputAlternative();
-        
-        // Test network connectivity to see if speech recognition is likely to work
-        this.testNetworkConnectivity().then(result => {
-            if (this.networkErrorCount > 0) {
-                this.addMessageToChat('ai', 'Speech recognition might not work due to network connectivity issues. You can use text input as an alternative.');
-            }
-        });
+        // Add initial message from assistant
+        setTimeout(() => {
+            this.addMessageToChat('assistant', "Hello! To begin our conversation, press the Record button and speak, or type in the text field below.");
+        }, 500);
     }
 
-    addWelcomeMessage() {
-        // Add a welcome message to guide the user
-        const welcomeMessages = [
-            "Hi there! You can either click the 'Start Recording' button to speak, or use the text input below.",
-            "Welcome! I'm ready to listen. You can speak using the recording button or type in the text box below.",
-            "Hello! To begin our conversation, either use the microphone button or just type your message below."
-        ];
-        
-        const randomMessage = welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)];
-        this.addMessageToChat('ai', randomMessage);
+    toggleTextInput() {
+        // No need to create elements since they already exist in HTML
+        if (this.textInputContainer) {
+            // Just toggle visibility if needed
+            const isHidden = this.textInputContainer.style.display === 'none';
+            this.textInputContainer.style.display = isHidden ? 'flex' : 'none';
+            
+            if (isHidden && this.textInput) {
+                this.textInput.focus();
+            }
+        }
     }
 
-    async startRecording() {
-        if (this.processingResponse) return;
+    toggleRecording() {
+        if (!this.isRecording) {
+            this.startRecording();
+        } else {
+            this.stopRecording();
+        }
+    }
 
-        try {
-            // Check if we're online
-            if (!navigator.onLine) {
-                this.addMessageToChat('ai', 'Your device appears to be offline. Speech recognition requires an internet connection.');
-                this.offerTextInputAlternative();
-                return;
-            }
-            
-            // Reset network error count on new recording attempt
-            this.networkErrorCount = 0;
-            
-            // Check microphone permissions before starting recording
-            const hasPermission = await this.checkMicrophonePermission();
-            if (!hasPermission) {
-                console.error('Microphone permission not granted, cannot start recording');
-                this.addMessageToChat('ai', 'Please allow microphone access to use speech recognition.');
-                this.offerTextInputAlternative();
-                return;
-            }
-
+    startRecording() {
+        if (!this.isRecording) {
             this.isRecording = true;
-            this.updateRecordingUI(true);
-            
-            // Create a new message container for this recording session
-            this.currentMessage = document.createElement('div');
-            this.currentMessage.classList.add('message', 'user-message');
-            this.currentMessage.textContent = '';
-            this.chatMessages.appendChild(this.currentMessage);
-            
-            // Start speech recognition with error handling and timeout
-            try {
-                await this.testNetworkConnectivity();
-                this.recognition.start();
-                console.log('Speech recognition started');
-                
-                // Set a timeout to detect if recognition doesn't start properly
-                this.recognitionTimeout = setTimeout(() => {
-                    if (this.isRecording) {
-                        console.log('Speech recognition timeout - may not have started properly');
-                        try {
-                            this.recognition.stop();
-                        } catch (e) {
-                            // Ignore errors when stopping
-                        }
-                        this.addMessageToChat('ai', 'Speech recognition is taking too long to connect. This might be due to network issues.');
-                        this.offerTextInputAlternative();
-                        this.updateRecordingUI(false);
-                        this.isRecording = false;
-                    }
-                }, 5000); // 5 second timeout
-            } catch (error) {
-                console.error('Error starting speech recognition:', error);
-                this.addMessageToChat('ai', 'Could not start speech recognition. Please use text input instead.');
-                this.updateRecordingUI(false);
-                this.isRecording = false;
-                this.offerTextInputAlternative();
+            if (this.recordButton) {
+                this.recordButton.innerHTML = '<span class="record-icon"></span> Stop Recording';
+                this.recordButton.classList.add('recording');
             }
-        } catch (error) {
-            console.error('Error in startRecording:', error);
-            this.addMessageToChat('ai', 'An error occurred. Please try text input instead.');
-            this.updateRecordingUI(false);
-            this.offerTextInputAlternative();
+            if (this.recordingStatus) {
+                this.recordingStatus.textContent = 'Listening...';
+            }
+            
+            this.facialAnimation.startListening()
+                .then(result => {
+                    if (result && result.transcript) {
+                        this.handleTranscript(result.transcript);
+                    } else if (result && result.error) {
+                        console.error('Speech recognition error:', result.error);
+                        this.handleSpeechRecognitionError(result.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error starting speech recognition:', error);
+                    this.handleSpeechRecognitionError(error.message || 'Unknown error');
+                })
+                .finally(() => {
+                    this.isRecording = false;
+                    if (this.recordButton) {
+                        this.recordButton.innerHTML = '<span class="record-icon"></span> Start Recording';
+                        this.recordButton.classList.remove('recording');
+                    }
+                    if (this.recordingStatus) {
+                        this.recordingStatus.textContent = 'Click to start speaking';
+                    }
+                });
         }
     }
 
     stopRecording() {
-        this.isRecording = false;
+        if (this.isRecording) {
+            this.facialAnimation.stopListening();
+            this.isRecording = false;
+            if (this.recordButton) {
+                this.recordButton.innerHTML = '<span class="record-icon"></span> Start Recording';
+                this.recordButton.classList.remove('recording');
+            }
+            if (this.recordingStatus) {
+                this.recordingStatus.textContent = 'Processing...';
+            }
+        }
+    }
+
+    handleSpeechRecognitionError(error) {
+        console.error('Speech recognition error:', error);
         
-        // Clear any pending timeout
-        if (this.recognitionTimeout) {
-            clearTimeout(this.recognitionTimeout);
-            this.recognitionTimeout = null;
+        // Update UI to show error
+        if (this.recordingStatus) {
+            this.recordingStatus.textContent = 'Speech recognition failed';
         }
         
-        try {
-            this.recognition.stop();
-        } catch (error) {
-            console.error('Error stopping recognition:', error);
+        // If it's a network error, increment counter
+        if (error.includes('network')) {
+            this.networkErrorCount++;
         }
         
-        this.updateRecordingUI(false);
-        this.currentMessage = null;
+        // If network error or no speech detected, suggest using text input
+        if (error.includes('network') || error.includes('no-speech')) {
+            if (this.textInputContainer && this.textInputContainer.style.display === 'none') {
+                this.textInputContainer.style.display = 'flex';
+                if (this.textInput) {
+                    setTimeout(() => this.textInput.focus(), 300);
+                }
+            }
+        }
+    }
+
+    handleTranscript(transcript) {
+        if (transcript && transcript.trim()) {
+            this.addMessageToChat('user', transcript);
+            this.generateResponse(transcript);
+        } else {
+            this.addMessageToChat('assistant', "I couldn't hear anything. Please try again or use the text input.");
+        }
     }
 
     updateRecordingUI(isRecording) {
@@ -339,126 +237,51 @@ class ChatbotSystem {
     }
 
     addMessageToChat(sender, text) {
-        if (sender === 'user' && this.isRecording && this.currentMessage) {
-            // Update the existing message during recording
-            this.currentMessage.textContent = text;
-        } else {
-            // Create a new message for AI responses or when not recording
-            const messageDiv = document.createElement('div');
-            messageDiv.classList.add('message', `${sender}-message`);
-            messageDiv.textContent = text;
-            this.chatMessages.appendChild(messageDiv);
-        }
+        if (!this.chatMessages) return;
+        
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('message');
+        messageElement.classList.add(sender === 'user' ? 'user-message' : 'ai-message');
+        
+        // Format links to be clickable
+        const formattedText = text.replace(
+            /(https?:\/\/[^\s]+)/g, 
+            '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+        );
+        
+        messageElement.innerHTML = formattedText;
+        this.chatMessages.appendChild(messageElement);
+        
+        // Scroll to the bottom
         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
 
     async generateResponse(userInput) {
         this.processingResponse = true;
-        this.stopRecording();
-
+        
         try {
-            // Simulate AI response generation
-            let response = await this.getAIResponse(userInput);
+            if (!userInput || !userInput.trim()) {
+                throw new Error('Empty input');
+            }
             
-            // Add AI response to chat
-            this.addMessageToChat('ai', response);
-
-            // Convert response to speech and animate
+            // Add loading message
+            this.recordingStatus.textContent = 'Processing response...';
+            
+            // Get response from facial animation system (which will handle API call)
+            const response = await this.facialAnimation.generateResponse(userInput);
+            
+            // Add response to chat
+            this.addMessageToChat('assistant', response);
+            
+            // Speak the response
             await this.facialAnimation.speakResponse(response);
         } catch (error) {
             console.error('Error generating response:', error);
-            this.addMessageToChat('ai', 'I apologize, but I encountered an error. Please try again.');
+            this.addMessageToChat('assistant', 'Sorry, I encountered an error while generating a response. Please try again.');
         } finally {
             this.processingResponse = false;
+            this.recordingStatus.textContent = 'Click to start speaking';
         }
-    }
-
-    async getAIResponse(userInput) {
-        try {
-            const genAI = new GoogleGenerativeAI('AIzaSyCT43QYBuN8a4dA8Pq6i9wxXmgHPPnO8a0');
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-
-            const prompt = `You are a highly skilled, empathetic therapeutic human with expertise in evidence-based approaches including cognitive-behavioral therapy (CBT), mindfulness, and positive psychology. Your purpose is to provide supportive, reflective conversations while maintaining clear professional boundaries.
-
-## Core Guidelines:
-- Keep all responses concise, limited to 1-2 sentences maximum
-- Practice active listening and validate emotions without judgment
-- Use a warm, supportive tone with appropriate pacing
-- Respond thoughtfully, reflecting the user's concerns with empathy
-- Offer perspective and gentle reframing when appropriate
-- Ask open-ended questions that promote self-reflection
-- Provide evidence-based coping strategies and practical tools
-- Maintain appropriate professional boundaries at all times
-
-## Important Limitations:
-- Clearly communicate you are not a licensed mental health professional
-- Do not diagnose medical or psychiatric conditions
-- Recommend professional help for serious concerns (suicidal thoughts, abuse, self-harm)
-- Avoid making promises about outcomes or specific results
-- Prioritize user safety above all else
-
-## Session Structure:
-1. Begin with a warm greeting and open-ended question about current concerns
-2. Practice reflective listening to understand the underlying issues
-3. Explore thoughts, feelings, and behaviors related to the situation
-4. Collaborate on identifying patterns and potential areas for growth
-5. Suggest relevant coping strategies or therapeutic techniques
-6. Encourage small, achievable steps toward positive change
-7. Close with validation and an invitation for further reflection
-
-## Therapeutic Techniques:
-- Cognitive restructuring for identifying and challenging unhelpful thoughts
-- Mindfulness practices for grounding and present-moment awareness
-- Values clarification to align actions with personal meaning
-- Strengths-based approaches that build on existing resources
-- Behavioral activation for depression and low motivation
-- Emotion regulation strategies for intense feelings
-- Problem-solving frameworks for navigating challenges
-
-## Response Format:
-- Always respond in just 1-2 concise sentences, even for complex topics
-- Focus on the most essential insight or question in each response
-- Use brief but impactful language that resonates emotionally
-- When suggesting techniques, provide just one clear, actionable step
-
-Always prioritize the user's wellbeing, maintain appropriate boundaries, and encourage professional help when needed. Respond to the following input from a client: "${userInput}"`;
-
-            const result = await model.generateContent(prompt);
-            const response = result.response.text();
-            
-            // Fallback responses in case of API failure
-            if (!response) {
-                return this.getFallbackResponse(userInput);
-            }
-
-            return response;
-        } catch (error) {
-            console.error('Error generating AI response:', error);
-            return this.getFallbackResponse(userInput);
-        }
-    }
-
-    getFallbackResponse(userInput) {
-        const input = userInput.toLowerCase();
-        
-        // Handle repeated requests to talk
-        if (input.includes('please') && (input.includes('talk') || input.includes('speak'))) {
-            const conversationStarters = [
-                "I'm here to listen and support you. What's on your mind today?",
-                "I can hear that you want to talk. What would you like to share with me?",
-                "You seem like you want to connect. I'm here for you - what would you like to discuss?"
-            ];
-            return conversationStarters[Math.floor(Math.random() * conversationStarters.length)];
-        }
-
-        // Default responses for when no specific keywords are matched
-        const defaultResponses = [
-            "I'm here to listen. What's on your mind?",
-            "I understand. Would you like to tell me more?",
-            "Your thoughts and feelings matter. What would you like to share?"
-        ];
-
-        return defaultResponses[Math.floor(Math.random() * defaultResponses.length)];
     }
 
     // Method to check microphone permissions
@@ -522,65 +345,19 @@ Always prioritize the user's wellbeing, maintain appropriate boundaries, and enc
                 return;
             }
             
-            // Create container with improved styling
+            // Create container with styling that matches our theme
             const container = document.createElement('div');
             container.id = 'text-input-alternative';
-            container.style.display = 'flex';
-            container.style.marginTop = '15px';
-            container.style.width = '100%';
-            container.style.boxShadow = '0 2px 5px rgba(0,0,0,0.1)';
-            container.style.borderRadius = '24px';
-            container.style.padding = '5px';
-            container.style.background = '#f9f9f9';
             
             // Create text input
             const input = document.createElement('input');
             input.id = 'text-input-field';
             input.type = 'text';
             input.placeholder = 'Type your message here...';
-            input.style.flex = '1';
-            input.style.padding = '12px 16px';
-            input.style.borderRadius = '20px';
-            input.style.border = '1px solid #ccc';
-            input.style.marginRight = '10px';
-            input.style.fontSize = '16px';
-            input.style.background = 'white';
             
             // Create send button
             const button = document.createElement('button');
             button.textContent = 'Send';
-            button.style.padding = '12px 20px';
-            button.style.borderRadius = '20px';
-            button.style.backgroundColor = '#4CAF50';
-            button.style.color = 'white';
-            button.style.border = 'none';
-            button.style.cursor = 'pointer';
-            button.style.fontSize = '16px';
-            button.style.fontWeight = 'bold';
-            
-            // Make it more visible
-            container.style.animation = 'fadeIn 0.5s';
-            const styleEl = document.createElement('style');
-            styleEl.textContent = `
-                @keyframes fadeIn {
-                    from { opacity: 0; transform: translateY(10px); }
-                    to { opacity: 1; transform: translateY(0); }
-                }
-                #text-input-field:focus {
-                    outline: none;
-                    border-color: #4CAF50;
-                    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
-                }
-                #text-input-alternative button:hover {
-                    background-color: #45a049;
-                    transform: translateY(-1px);
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-                }
-                #text-input-alternative button:active {
-                    transform: translateY(1px);
-                }
-            `;
-            document.head.appendChild(styleEl);
             
             // Add event listeners
             button.addEventListener('click', () => {
@@ -606,9 +383,15 @@ Always prioritize the user's wellbeing, maintain appropriate boundaries, and enc
             // Add to DOM
             container.appendChild(input);
             container.appendChild(button);
-            chatInputArea.appendChild(container);
             
-            // Focus the input
+            // Always insert at the top of chat input area
+            if (chatInputArea.firstChild) {
+                chatInputArea.insertBefore(container, chatInputArea.firstChild);
+            } else {
+                chatInputArea.appendChild(container);
+            }
+            
+            // Always create the text input right away without waiting
             setTimeout(() => input.focus(), 100);
         } else {
             // If it already exists, make sure it's visible and focused
@@ -730,13 +513,13 @@ class FacialAnimationSystem {
             const modelLoader = this.modelLoader;
             const model = await modelLoader.loadModel('/assets/models/model_full.glb');
             
-            // Keep the model at its original size and position
-            // For full body models, adjust Y position to place feet on ground
-            model.position.y = 0; // Ensure the model sits at the origin Y
-            this.scene.add(model);
+            // Place model at the origin, but adjust for perfect conversational height
+            // We'll further refine in the loadRoomModel method
+            model.position.y = 0;
             
-            // Add a button to reset the model to its original state
-            this.addResetModelButton();
+            // Store the model reference for later adjustments
+            this.characterModel = model;
+            this.scene.add(model);
             
             // Find mesh with morph targets but don't apply animations yet
             this.morphTargetMesh = modelLoader.findMorphTargetMesh(model);
@@ -750,6 +533,9 @@ class FacialAnimationSystem {
             
             // Skip creating default animation which might affect appearance
             console.log('Using original model animation only');
+            
+            // Fix avatar hair first
+            this.fixAvatarHair();
             
             // Load the room model and position character within it
             this.loadRoomModel(model);
@@ -771,6 +557,10 @@ class FacialAnimationSystem {
             });
             
             const roomModel = roomGltf.scene;
+            
+            // Keep room position at Y=0 as the reference point for proper alignment
+            roomModel.position.y = 0;
+            console.log('Room positioned at origin Y=0 for consistent reference');
             
             // Enable shadows on the room
             roomModel.traverse(node => {
@@ -799,78 +589,44 @@ class FacialAnimationSystem {
             
             console.log('Room dimensions:', roomSize, 'Center:', roomCenter);
             
-            // Get the floor Y position - use the minimum Y of the room bounds
-            const floorY = roomBounds.min.y;
-            console.log('Floor Y position (from bounds):', floorY);
-            
-            // Find the floor in the room model for more precise positioning
-            let floorMesh = null;
-            roomModel.traverse(node => {
-                // Look for common floor naming or large horizontal surfaces
-                if (node.isMesh && 
-                   (node.name.toLowerCase().includes('floor') || 
-                    node.name.toLowerCase().includes('ground'))) {
-                    floorMesh = node;
-                }
-            });
-            
-            // Get character's bounding box to measure its dimensions
+            // Calculate character's bounding box
             const characterBounds = new THREE.Box3().setFromObject(characterModel);
-            const characterSize = new THREE.Vector3();
-            characterBounds.getSize(characterSize);
-            const characterHeight = characterSize.y;
+            const characterHeight = characterBounds.max.y - characterBounds.min.y;
             
-            console.log('Character height:', characterHeight);
+            // The standard eye height is approximately 1.65 meters for an average person
+            const standardEyeHeight = 1.65;
             
-            // Calculate the position offset needed to place feet on floor
-            const feetOffset = characterBounds.min.y - characterModel.position.y;
-            console.log('Character feet offset:', feetOffset);
-            
-            // Position character in the room
+            // Calculate where the character's eyes are (approximately 90% of height from bottom)
+            const characterEyeHeightRatio = 0.9;
+            const characterEyeHeightFromBottom = characterHeight * characterEyeHeightRatio;
+
+            console.log(`Character height: ${characterHeight.toFixed(2)}, eye height from bottom: ${characterEyeHeightFromBottom.toFixed(2)}`);
+
+            // Calculate how high the character's feet should be to put eyes at standard height
+            const characterFeetPosition = standardEyeHeight - characterEyeHeightFromBottom;
+
+            console.log(`Setting character feet position to Y=${characterFeetPosition.toFixed(2)} to align eyes at ${standardEyeHeight}m`);
+
+            // Position character for optimal face-to-face conversation
             characterModel.position.set(
-                roomCenter.x, // Center horizontally
-                floorY - feetOffset + 0.85, // Place feet exactly on the floor with small offset to prevent clipping
-                roomCenter.z // Center depth-wise
+                0,                        // Centered horizontally
+                characterFeetPosition,    // Use calculated eye-aligned position
+                -2                        // 2 meters in front of user
             );
             
-            // If the character height is too small compared to the room (less than 60% of room height)
-            // scale it up to make it more visible and proportional to the room
-            const scaleRatio = roomSize.y / characterHeight;
+            console.log('Final character position:', characterModel.position);
             
-            if (scaleRatio > 3) {
-                // Scale up the character to a more visible size
-                const newScale = 1.8; // Increase scale more for better visibility
-                characterModel.scale.set(newScale, newScale, newScale);
-                console.log('Character scaled up by factor of', newScale);
-                
-                // Recalculate bounding box after scaling
-                const newBounds = new THREE.Box3().setFromObject(characterModel);
-                const newFeetOffset = newBounds.min.y - characterModel.position.y;
-                
-                // Adjust position again after scaling to ensure feet are on floor
-                characterModel.position.y = floorY - newFeetOffset + 0.85; // Small offset to prevent z-fighting
-            }
-            
-            console.log('Character positioned at:', characterModel.position);
-            
-            // Make sure character casts shadows
-            characterModel.traverse(node => {
-                if (node.isMesh) {
-                    node.castShadow = true;
-                    
-                    // Make sure materials render properly
-                    if (node.material) {
-                        node.material.needsUpdate = true;
-                    }
-                }
-            });
-            
-            // Make sure the entire character is visible
-            // Position camera to show full body
-            this.adjustCameraForFullBodyView(characterModel, roomBounds);
+            // Update camera to look directly at character's eye level
+            this.adjustCameraForConversation(characterModel);
             
             // Update room lighting to match the environment
             this.updateLightingForRoom(roomModel);
+            
+            // Store the initial eye-aligned position for VR mode
+            this.initialEyeAlignedPosition = {
+                character: characterModel.position.clone(),
+                room: roomModel.position.clone()
+            };
             
             return roomModel;
         } catch (error) {
@@ -878,42 +634,43 @@ class FacialAnimationSystem {
         }
     }
     
-    adjustCameraForFullBodyView(characterModel, roomBounds) {
+    adjustCameraForConversation(characterModel) {
+        // The standard eye height for an average person
+        const standardEyeHeight = 1.65;
+        
         // Calculate the character's bounding box
         const characterBounds = new THREE.Box3().setFromObject(characterModel);
-        const characterSize = new THREE.Vector3();
-        characterBounds.getSize(characterSize);
-        const characterCenter = new THREE.Vector3();
-        characterBounds.getCenter(characterCenter);
+        const characterHeight = characterBounds.max.y - characterBounds.min.y;
         
-        // Position camera to view the full character body
-        const distanceToShowFullBody = characterSize.y * 2.0; // Increased for better view
-        const heightOffset = characterSize.y * 0.4; // Look at the upper body
+        // Calculate where the character's eyes are (approximately 90% of height from bottom)
+        const characterEyeHeightRatio = 0.9;
+        const characterEyeHeight = characterModel.position.y + (characterHeight * characterEyeHeightRatio);
         
-        // Position camera to look at character from an angle
+        console.log(`Character eye height calculated at Y=${characterEyeHeight.toFixed(2)}`);
+        
+        // Position camera at standard eye height looking at character's face
         this.camera.position.set(
-            characterCenter.x + distanceToShowFullBody * 0.7,
-            characterCenter.y + heightOffset,
-            characterCenter.z + distanceToShowFullBody * 0.7
+            0,                // Centered horizontally
+            standardEyeHeight, // Standard eye height
+            1.5               // 1.5 meters back from origin
         );
         
-        // Point camera at character's upper body
-        const lookAtPoint = new THREE.Vector3(
-            characterCenter.x,
-            characterCenter.y + (characterSize.y * 0.2), // Look at upper body
-            characterCenter.z
-        );
-        this.camera.lookAt(lookAtPoint);
+        // Look at character's face
+        this.camera.lookAt(new THREE.Vector3(
+            0,                // Centered horizontally
+            characterEyeHeight, // Character's eye level
+            -2                // Character is 2 meters away
+        ));
         
-        // Update orbit controls to target the character
-        this.controls.target.copy(lookAtPoint);
+        // Update orbit controls to target character's face
+        this.controls.target.set(0, characterEyeHeight, -2);
         
-        // Adjust control limits to prevent going through the floor or too far away
-        this.controls.minDistance = characterSize.y * 1.0;
-        this.controls.maxDistance = characterSize.y * 5.0;
+        // Adjust control limits for natural movement
+        this.controls.minDistance = 1.0; // Closest approach
+        this.controls.maxDistance = 5.0; // Maximum distance
         this.controls.update();
         
-        console.log('Camera adjusted for full body view');
+        console.log('Camera positioned at eye level for face-to-face conversation');
     }
     
     updateLightingForRoom(roomModel) {
@@ -924,17 +681,17 @@ class FacialAnimationSystem {
             }
         });
         
-        // Create new lighting setup appropriate for indoor scene
+        // Create new lighting setup optimized for face-to-face conversation
         
-        // Keep ambient light but adjust intensity
+        // Keep ambient light but adjust intensity for better overall illumination
         const ambientLight = this.scene.children.find(child => child instanceof THREE.AmbientLight);
         if (ambientLight) {
-            ambientLight.intensity = 0.5; // Keep this lower to not brighten the room too much
+            ambientLight.intensity = 0.6; // Increased for better base illumination
         }
         
-        // Create main directional light (window light)
-        const mainLight = new THREE.DirectionalLight(0xffffff, 0.8); // Standard room lighting
-        mainLight.position.set(10, 8, 5);
+        // Create main directional light (simulating window light)
+        const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        mainLight.position.set(10, 8, 5); 
         mainLight.castShadow = true;
         
         // Better shadow settings
@@ -954,58 +711,129 @@ class FacialAnimationSystem {
         this.scene.add(mainLight);
         
         // Add some soft fill lights for the room
-        const fillLight1 = new THREE.PointLight(0xffffff, 0.4); // Keep the room lighting standard
+        const fillLight1 = new THREE.PointLight(0xffffff, 0.4);
         fillLight1.position.set(-5, 5, -5);
         this.scene.add(fillLight1);
         
-        const fillLight2 = new THREE.PointLight(0xffffff, 0.2); // Keep the room lighting standard
+        const fillLight2 = new THREE.PointLight(0xffffff, 0.2);
         fillLight2.position.set(5, 2, -5);
         this.scene.add(fillLight2);
         
-        // ======= CHARACTER-SPECIFIC LIGHTING - ENHANCED FOR BRIGHTNESS =======
+        // ======= FACE-TO-FACE CONVERSATION SPECIFIC LIGHTING =======
         
-        // Primary character spotlight - significantly brighter
-        const characterSpotlight = new THREE.SpotLight(0xffffff, 1.5); // Increased intensity
-        characterSpotlight.position.set(0, 8, 5);
-        characterSpotlight.angle = Math.PI / 6;
-        characterSpotlight.penumbra = 0.5;
-        characterSpotlight.decay = 1.0; // Reduced decay for brighter illumination
-        characterSpotlight.distance = 20;
-        characterSpotlight.target.position.set(0, 1.5, 0); // Aim at character's upper body
+        // Key light for illuminating the character's face
+        // Positioned in the same general area as the user's viewpoint for natural illumination
+        const faceKeyLight = new THREE.SpotLight(0xffffff, 1.0); 
+        faceKeyLight.position.set(0, 1.8, 1.5); // Positioned near the user's viewpoint
+        faceKeyLight.target.position.set(0, 1.65, 0); // Target the character's face
+        faceKeyLight.angle = Math.PI / 6; // Narrow spotlight
+        faceKeyLight.penumbra = 0.5; // Soft edges
+        faceKeyLight.decay = 1.0;
+        faceKeyLight.distance = 5; // Short distance to focus on character
         
-        // Only make the character receive this light by using layers
-        characterSpotlight.castShadow = true;
-        characterSpotlight.shadow.bias = -0.002; // Adjust shadow bias
+        faceKeyLight.castShadow = true;
+        faceKeyLight.shadow.bias = -0.002;
         
-        this.scene.add(characterSpotlight);
-        this.scene.add(characterSpotlight.target);
+        this.scene.add(faceKeyLight);
+        this.scene.add(faceKeyLight.target);
         
-        // Add secondary front light for the character
-        const characterFrontLight = new THREE.SpotLight(0xffffff, 1.2);
-        characterFrontLight.position.set(0, 1.8, 8); // Position in front
-        characterFrontLight.angle = Math.PI / 8;
-        characterFrontLight.penumbra = 0.7;
-        characterFrontLight.decay = 1.0;
-        characterFrontLight.distance = 15;
-        characterFrontLight.target.position.set(0, 1.5, 0);
-        this.scene.add(characterFrontLight);
-        this.scene.add(characterFrontLight.target);
+        // VR-specific fill light from below to light the face in darker VR headsets
+        const faceFillLight = new THREE.SpotLight(0xfffff0, 0.7); // Slight warm tint
+        faceFillLight.position.set(0, 1.0, 1.0); // Below viewing position
+        faceFillLight.target.position.set(0, 1.65, 0); // Aim at face
+        faceFillLight.angle = Math.PI / 5;
+        faceFillLight.penumbra = 0.7;
+        faceFillLight.decay = 1.5;
+        faceFillLight.distance = 3;
         
-        // Add fill light from below to remove any harsh shadows
-        const characterFillLight = new THREE.PointLight(0xfffff0, 0.7); // Slight warm tint
-        characterFillLight.position.set(0, 0.8, 4);
-        characterFillLight.distance = 8;
-        characterFillLight.decay = 1.5;
-        this.scene.add(characterFillLight);
+        this.scene.add(faceFillLight);
+        this.scene.add(faceFillLight.target);
         
-        // Enable renderer shadows if they weren't already
+        // Add a rim light to separate character from background
+        const rimLight = new THREE.SpotLight(0xffffff, 0.8);
+        rimLight.position.set(0, 1.8, -1.0); // Behind character
+        rimLight.target.position.set(0, 1.65, 0);
+        rimLight.angle = Math.PI / 6;
+        rimLight.penumbra = 0.5;
+        rimLight.decay = 1.0;
+        rimLight.distance = 5;
+        
+        this.scene.add(rimLight);
+        this.scene.add(rimLight.target);
+        
+        // VR-specific: Create a conversational lighting environment
+        // Add a light slightly to the side to create gentle shadows for facial features
+        const detailLight = new THREE.SpotLight(0xffffff, 0.5);
+        detailLight.position.set(1.0, 1.7, 1.2); // Slightly to the side
+        detailLight.target.position.set(0, 1.65, 0);
+        detailLight.angle = Math.PI / 8; // Very narrow for detail
+        detailLight.penumbra = 0.8;
+        detailLight.decay = 1.5;
+        detailLight.distance = 4;
+        
+        this.scene.add(detailLight);
+        this.scene.add(detailLight.target);
+        
+        // NEW: Add subtle side lighting for the room to create atmosphere
+        const roomSideLight = new THREE.SpotLight(0xf5e3c8, 0.6); // Warm color
+        roomSideLight.position.set(-8, 5, 0); // Position on the left side of the room
+        roomSideLight.target.position.set(0, 0, 0); // Target center of room
+        roomSideLight.angle = Math.PI / 4; // Wider angle for room lighting
+        roomSideLight.penumbra = 0.9; // Very soft edges
+        roomSideLight.decay = 1.2;
+        roomSideLight.distance = 15; // Longer distance to cover the room
+        
+        // Add some dynamic shadow to add depth to the room
+        roomSideLight.castShadow = true;
+        roomSideLight.shadow.mapSize.width = 1024;
+        roomSideLight.shadow.mapSize.height = 1024;
+        roomSideLight.shadow.camera.far = 20;
+        roomSideLight.shadow.bias = -0.001;
+        
+        this.scene.add(roomSideLight);
+        this.scene.add(roomSideLight.target);
+        
+        // Enable renderer shadows
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         
-        // Tone mapping for the overall scene - keep at moderate level
-        this.renderer.toneMappingExposure = 1.2; 
+        // Tone mapping to enhance visibility in VR
+        this.renderer.toneMappingExposure = 1.3; // Slightly brighter for VR headsets
         
-        console.log('Room lighting updated with enhanced character-specific illumination');
+        console.log('Lighting optimized for face-to-face conversation in VR');
+    }
+
+    // Fix for avatar hair meshes
+    fixAvatarHair() {
+        if (!this.characterModel) return;
+        
+        // Find hair-related meshes in the model
+        this.characterModel.traverse(node => {
+            if (node.isMesh && node.name.toLowerCase().includes('hair')) {
+                // Reset any problematic transformations that might have flattened the hair
+                const originalScale = node.scale.clone();
+                
+                // Ensure hair has proper volume (slightly increase Y scale if it was flattened)
+                node.scale.y = Math.max(node.scale.y, originalScale.x * 1.1);
+                
+                console.log('Fixed hair mesh:', node.name);
+                
+                // Make sure hair materials have proper settings
+                if (node.material) {
+                    // Ensure normal maps are properly applied
+                    if (node.material.normalMap) {
+                        node.material.normalScale.set(1.0, 1.0);
+                    }
+                    
+                    // Slightly increase roughness for more natural look
+                    if (node.material.roughness !== undefined) {
+                        node.material.roughness = Math.min(node.material.roughness, 0.7);
+                    }
+                    
+                    node.material.needsUpdate = true;
+                }
+            }
+        });
     }
 
     initializeMorphTargets() {
@@ -1033,133 +861,56 @@ class FacialAnimationSystem {
     }
 
     initScene() {
-        // Three.js setup
+        // Create scene
         this.scene = new THREE.Scene();
         
-        // Calculate aspect ratio based on container size
-        const container = document.getElementById('animation-container');
-        const aspect = container.clientWidth / container.clientHeight;
+        // Create camera with standard human eye level
+        this.camera = new THREE.PerspectiveCamera(
+            45, 
+            window.innerWidth / window.innerHeight, 
+            0.1, 
+            1000
+        );
         
-        // Use a more standard field of view that won't distort the model
-        this.camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
-        this.renderer = new THREE.WebGLRenderer({ 
+        // Position for conversational distance (slightly closer and directly centered)
+        this.camera.position.set(0, 1.65, 1.5); // Moved closer for conversation
+        
+        // Get container for renderer
+        const container = document.getElementById('canvas-container');
+        if (!container) {
+            console.error('Could not find canvas container');
+            return;
+        }
+        
+        // Create renderer
+        this.renderer = new THREE.WebGLRenderer({
             antialias: true,
-            alpha: false, // No transparent background when using room
-            preserveDrawingBuffer: true 
+            alpha: true,
+            preserveDrawingBuffer: true
         });
-        
-        // Enable VR with specific XR features
-        this.renderer.xr.enabled = true;
-        
-        // Enable shadows and higher quality rendering
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setClearColor(0x000000, 0); // Set clear color to transparent
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        
-        // Enable tone mapping and correct color space
+        this.renderer.outputEncoding = THREE.sRGBEncoding;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.2; // Slightly brighter for indoor scene
-        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.toneMappingExposure = 1.0;
         
-        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        // Enable XR features
+        this.renderer.xr.enabled = true;
+        
         container.appendChild(this.renderer.domElement);
 
-        // Create VR Button with mobile VR support
-        const createVRButton = () => {
-            const button = document.createElement('button');
-            button.className = 'vr-button';
-            button.textContent = 'ENTER VR MODE';
-            
-            // Style the button for better mobile visibility
-            const style = document.createElement('style');
-            style.textContent = `
-                .vr-button {
-                    position: fixed;
-                    bottom: 80px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    padding: 20px 40px;
-                    background: #4CAF50;
-                    color: white;
-                    border: none;
-                    border-radius: 30px;
-                    cursor: pointer;
-                    z-index: 999;
-                    font-size: 24px;
-                    font-weight: bold;
-                    box-shadow: 0 6px 12px rgba(0,0,0,0.3);
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                    -webkit-tap-highlight-color: transparent;
-                    transition: all 0.3s ease;
-                    width: 80%;
-                    max-width: 300px;
-                }
-                .vr-button:hover {
-                    background: #45a049;
-                    transform: translateX(-50%) scale(1.05);
-                }
-                .vr-button:active {
-                    transform: translateX(-50%) scale(0.95);
-                }
-                @media (max-width: 768px) {
-                    .vr-button {
-                        bottom: 40px;
-                        padding: 24px 40px;
-                        font-size: 28px;
-                        width: 90%;
-                    }
-                }
-            `;
-            document.head.appendChild(style);
+        // Create VR button using the simplified implementation
+        VRInitializer.createVRButton(this.renderer);
 
-            // Handle VR session with specific configuration for mobile VR
-            button.addEventListener('click', async () => {
-                try {
-                    if (navigator.xr) {
-                        const session = await navigator.xr.requestSession('immersive-vr', {
-                            optionalFeatures: [
-                                'local-floor',
-                                'bounded-floor',
-                                'hand-tracking',
-                                'layers'
-                            ]
-                        });
-                        
-                        await this.renderer.xr.setSession(session);
-                        
-                        // Position camera for VR using standard human height parameters
-                        this.camera.position.set(0, 1.6, 2.0);
-                        this.camera.lookAt(0, 1.6, 0);
-                        
-                        button.textContent = 'Exit VR';
-                        
-                        session.addEventListener('end', () => {
-                            button.textContent = 'ENTER VR MODE';
-                            this.renderer.xr.setSession(null);
-                        });
-                    } else {
-                        alert('WebXR not available on your device. Please use a WebXR-compatible browser and VR headset.');
-                    }
-                } catch (error) {
-                    console.error('VR initialization error:', error);
-                    alert('Unable to enter VR. Make sure you have a compatible VR viewer and are using HTTPS.');
-                }
-            });
-
-            return button;
-        };
-
-        // Add VR button to container
-        const vrButton = createVRButton();
-        container.appendChild(vrButton);
-
-        // Position camera at a standard human eye level looking straight ahead
-        this.camera.position.set(0, 1.6, 2.0);
-        this.camera.lookAt(0, 1.6, 0);
+        // Position camera at a perfect conversational distance - looking directly at character face
+        this.camera.position.set(0, 1.65, 1.5);
+        this.camera.lookAt(0, 1.65, 0);
 
         // Set up the scene environment
-        this.scene.background = new THREE.Color(0x1a1a1a); // This will be overridden when the room is loaded
+        this.scene.background = null; // Changed from THREE.Color(0x1a1a1a) to null for transparency
 
         // Standard lighting setup - this will be replaced by the room-specific lighting
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -1199,17 +950,17 @@ class FacialAnimationSystem {
         this.controls.minDistance = 1.0;
         this.controls.maxDistance = 20.0; // Increased to allow viewing entire room
         
-        // Set orbit target to match the model's head position
-        this.controls.target.set(0, 1.6, 0);
+        // Set orbit target to match the character's eye position
+        this.controls.target.set(0, 1.65, 0); // Target character's eyes
         this.controls.update();
 
         // Handle window resizing
         window.addEventListener('resize', () => {
-            const container = document.getElementById('animation-container');
-            const aspect = container.clientWidth / container.clientHeight;
-            this.camera.aspect = aspect;
+            const width = window.innerWidth;
+            const height = window.innerHeight; 
+            this.camera.aspect = width / height;
             this.camera.updateProjectionMatrix();
-            this.renderer.setSize(container.clientWidth, container.clientHeight);
+            this.renderer.setSize(width, height);
         });
 
         // Set up the animation loop with XR support
@@ -1217,41 +968,26 @@ class FacialAnimationSystem {
 
         // Animation loop with VR support
         const animate = () => {
-            this.renderer.setAnimationLoop(() => {
-                const delta = this.clock.getDelta();
-                
-                // Always update the animation mixer to play the original avaturn_animation
-                // regardless of speech state
-                if (this.modelLoader && this.modelLoader.getMixer()) {
-                    this.modelLoader.updateMixer(delta);
-                }
-                
+            if (!this.renderer.xr.isPresenting) {
                 // Update controls only in non-VR mode
-                if (!this.renderer.xr.isPresenting) {
-                    this.controls.update();
-                }
-                
-                // Update morph targets based on animation state
-                if (this.morphTargetMesh) {
-                    if (this.isAudioPlaying) {
-                        this.updateMorphTargets();
-                    } else if (this.transitionToRestingFace) {
-                        // Apply transition to resting face
-                        this.applyRestingFaceTransition();
-                    } else {
-                        // Ensure morphs are zeroed out
-                        this.morphTargetMesh.morphTargetInfluences.fill(0);
-                        // Apply eye movements in non-speaking state
-                        this.applyEyeMovements();
-                    }
-                }
-                
-                // Render scene
-                this.renderer.render(this.scene, this.camera);
-            });
+                this.controls.update();
+            }
+            
+            // Update morph targets
+            this.updateMorphTargets();
+            
+            // Update animation mixer if available
+            if (this.modelLoader && this.modelLoader.getMixer()) {
+                const delta = this.clock.getDelta();
+                this.modelLoader.getMixer().update(delta);
+            }
+            
+            // Render scene
+            this.renderer.render(this.scene, this.camera);
         };
-
-        animate();
+        
+        // Use WebXR's animation loop
+        this.renderer.setAnimationLoop(animate);
     }
 
     updateMorphTargets() {
@@ -1707,99 +1443,206 @@ class FacialAnimationSystem {
         }
     }
 
-    // Add a button to reset the model to its original state
-    addResetModelButton() {
-        const container = document.getElementById('animation-container');
-        const button = document.createElement('button');
-        button.className = 'reset-button';
-        button.textContent = 'RESET MODEL';
-        
-        // Style the button
-        const style = document.createElement('style');
-        style.textContent = `
-            .reset-button {
-                position: fixed;
-                bottom: 150px;
-                left: 50%;
-                transform: translateX(-50%);
-                padding: 15px 30px;
-                background: #3F51B5;
-                color: white;
-                border: none;
-                border-radius: 30px;
-                cursor: pointer;
-                z-index: 999;
-                font-size: 20px;
-                font-weight: bold;
-                box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-                text-transform: uppercase;
-            }
-            .reset-button:hover {
-                background: #303F9F;
-            }
-        `;
-        document.head.appendChild(style);
-        
-        // Reset the model when clicked
-        button.addEventListener('click', () => {
-            this.resetModelToOriginal();
-        });
-        
-        container.appendChild(button);
-    }
-    
     // Reset the model to its original state without any morphs but keep original animation
     resetModelToOriginal() {
-        if (!this.modelLoader || !this.morphTargetMesh) return;
-        
-        console.log('Resetting model to original state...');
-        
-        // Reset all morph targets to zero
-        if (this.morphTargetMesh.morphTargetInfluences) {
-            this.morphTargetMesh.morphTargetInfluences.fill(0);
+        // Stub method retained for compatibility
+        console.log('resetModelToOriginal called but disabled');
+    }
+
+    async generateResponse(userInput) {
+        try {
+            const genAI = new GoogleGenerativeAI('AIzaSyCT43QYBuN8a4dA8Pq6i9wxXmgHPPnO8a0');
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+            const prompt = `You are a highly skilled, empathetic therapeutic human with expertise in evidence-based approaches including cognitive-behavioral therapy (CBT), mindfulness, and positive psychology. Your purpose is to provide supportive, reflective conversations while maintaining clear professional boundaries.
+
+## Core Guidelines:
+- Keep all responses concise, limited to 1-2 sentences maximum
+- Practice active listening and validate emotions without judgment
+- Use a warm, supportive tone with appropriate pacing
+- Respond thoughtfully, reflecting the user's concerns with empathy
+- Offer perspective and gentle reframing when appropriate
+- Ask open-ended questions that promote self-reflection
+- Provide evidence-based coping strategies and practical tools
+- Maintain appropriate professional boundaries at all times
+
+## Important Limitations:
+- Clearly communicate you are not a licensed mental health professional
+- Do not diagnose medical or psychiatric conditions
+- Recommend professional help for serious concerns (suicidal thoughts, abuse, self-harm)
+- Avoid making promises about outcomes or specific results
+- Prioritize user safety above all else
+
+## Session Structure:
+1. Begin with a warm greeting and open-ended question about current concerns
+2. Practice reflective listening to understand the underlying issues
+3. Explore thoughts, feelings, and behaviors related to the situation
+4. Collaborate on identifying patterns and potential areas for growth
+5. Suggest relevant coping strategies or therapeutic techniques
+6. Encourage small, achievable steps toward positive change
+7. Close with validation and an invitation for further reflection
+
+## Therapeutic Techniques:
+- Cognitive restructuring for identifying and challenging unhelpful thoughts
+- Mindfulness practices for grounding and present-moment awareness
+- Values clarification to align actions with personal meaning
+- Strengths-based approaches that build on existing resources
+- Behavioral activation for depression and low motivation
+- Emotion regulation strategies for intense feelings
+- Problem-solving frameworks for navigating challenges
+
+## Response Format:
+- Always respond in just 1-2 concise sentences, even for complex topics
+- Focus on the most essential insight or question in each response
+- Use brief but impactful language that resonates emotionally
+- When suggesting techniques, provide just one clear, actionable step
+
+Always prioritize the user's wellbeing, maintain appropriate boundaries, and encourage professional help when needed. Respond to the following input from a client: "${userInput}"`;
+
+            const result = await model.generateContent(prompt);
+            const response = result.response.text();
+            
+            // Fallback responses in case of API failure
+            if (!response) {
+                return this.getFallbackResponse(userInput);
+            }
+
+            return response;
+        } catch (error) {
+            console.error('Error generating AI response:', error);
+            return this.getFallbackResponse(userInput);
         }
+    }
+    
+    getFallbackResponse(userInput) {
+        const input = userInput.toLowerCase();
         
-        // Stop all animations
-        if (this.modelLoader.getMixer()) {
-            const mixer = this.modelLoader.getMixer();
+        // Handle repeated requests to talk
+        if (input.includes('please') && (input.includes('talk') || input.includes('speak'))) {
+            const conversationStarters = [
+                "I'm here to listen and support you. What's on your mind today?",
+                "I can hear that you want to talk. What would you like to share with me?",
+                "You seem like you want to connect. I'm here for you - what would you like to discuss?"
+            ];
+            return conversationStarters[Math.floor(Math.random() * conversationStarters.length)];
+        }
+
+        // Default responses for when no specific keywords are matched
+        const defaultResponses = [
+            "I'm here to listen. What's on your mind?",
+            "I understand. Would you like to tell me more?",
+            "Your thoughts and feelings matter. What would you like to share?"
+        ];
+
+        return defaultResponses[Math.floor(Math.random() * defaultResponses.length)];
+    }
+    
+    // Add speech recognition methods
+    async startListening() {
+        return new Promise((resolve, reject) => {
+            if (!('webkitSpeechRecognition' in window)) {
+                reject(new Error('Speech recognition not supported in this browser'));
+                return;
+            }
             
-            // Stop all non-avaturn animations
-            mixer.stopAllAction();
+            // Create recognition instance if it doesn't exist
+            if (!this.recognition) {
+                this.recognition = new webkitSpeechRecognition();
+                this.recognition.continuous = false;
+                this.recognition.interimResults = true;
+                this.recognition.lang = 'en-US';
+                this.recognition.maxAlternatives = 3;
+                
+                this.recognition.onresult = (event) => {
+                    const transcript = event.results[0][0].transcript;
+                    if (event.results[0].isFinal) {
+                        this.recognitionResult = {
+                            transcript: transcript,
+                            confidence: event.results[0][0].confidence
+                        };
+                    }
+                };
+                
+                this.recognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    this.recognitionResult = {
+                        error: event.error,
+                        message: `Speech recognition error: ${event.error}`
+                    };
+                };
+                
+                this.recognition.onend = () => {
+                    resolve(this.recognitionResult || { error: 'No speech detected' });
+                    this.recognitionResult = null;
+                };
+            }
             
-            // Restart the original avaturn animation
-            if (this.modelLoader.animations['avaturn_animation']) {
-                console.log('Restarting original avaturn_animation');
-                const action = mixer.clipAction(this.modelLoader.animations['avaturn_animation']);
-                action.setLoop(THREE.LoopRepeat);
-                action.play();
+            // Reset and start
+            this.recognitionResult = null;
+            
+            try {
+                this.recognition.start();
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+    
+    stopListening() {
+        if (this.recognition) {
+            try {
+                this.recognition.stop();
+            } catch (error) {
+                console.error('Error stopping recognition:', error);
             }
         }
-        
-        // Reset any animation state
-        this.isAudioPlaying = false;
-        this.currentVisemeTimeline = null;
-        this.lastVisemes = null;
-        this.transitionToRestingFace = false;
-        this.transitionStartTime = null;
-        this.morphStartState = null;
-        
-        // Reset camera to a good viewing position
-        this.camera.position.set(0, 1.6, 2.0);
-        this.camera.lookAt(0, 1.6, 0);
-        this.controls.target.set(0, 1.6, 0);
-        this.controls.update();
-        
-        console.log('Model reset to original state');
     }
 }
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    // Create a global helper to initialize audio
-    window.initAudio = async function() {
+    // Improved service worker registration with error handling
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/src/service-worker.js', { scope: '/' })
+            .then(registration => {
+                console.log('ServiceWorker registration successful with scope:', registration.scope);
+                
+                // Check for updates to the service worker
+                registration.addEventListener('updatefound', () => {
+                    const newWorker = registration.installing;
+                    console.log('New service worker installing:', newWorker);
+                    
+                    newWorker.addEventListener('statechange', () => {
+                        console.log('Service worker state changed to:', newWorker.state);
+                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            console.log('New content is available; please refresh.');
+                        }
+                    });
+                });
+            })
+            .catch(error => {
+                console.error('ServiceWorker registration failed:', error);
+                
+                // If registration fails, we can still run the app without caching
+                console.log('Running without service worker caching - app will work but may not be available offline');
+            });
+        
+        // Handle service worker updates
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (!refreshing) {
+                refreshing = true;
+                console.log('Controller changed, refreshing page');
+                window.location.reload();
+            }
+        });
+    } else {
+        console.log('Service workers are not supported in this browser');
+    }
+    
+    // Initialize audio on user interaction
+    window.addEventListener('click', async function() {
         try {
-            console.log('Initializing audio system on user interaction');
-            
             // Try to create and resume an audio context
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) {
@@ -1807,96 +1650,131 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (tempContext.state === 'suspended') {
                     await tempContext.resume();
                 }
-                
-                // Play a silent sound to unlock audio
-                const buffer = tempContext.createBuffer(1, 1, 22050);
-                const source = tempContext.createBufferSource();
-                source.buffer = buffer;
-                source.connect(tempContext.destination);
-                source.start(0);
-                
-                console.log('Audio system initialized successfully');
+                console.log('Audio initialized');
             }
+        } catch (err) {
+            console.error('Error initializing audio:', err);
+        }
+    });
+    
+    // Initialize WebXR support detection
+    VRInitializer.checkVRSupport();
+    VRInitializer.setupVRViewport();
+    VRInitializer.ensureVRButtonVisibility();
+    
+    // Configure WebXR for optimal face-to-face conversation
+    if (navigator.xr) {
+        // Add a listener for VR session start to position the camera correctly
+        document.addEventListener('vrsessionstart', () => {
+            console.log('VR session started - optimizing for face-to-face conversation at eye level');
             
-            // Also try to resume chatbot's audio context if it exists
-            if (window.chatbot && 
-                window.chatbot.facialAnimation && 
-                window.chatbot.facialAnimation.audioManager &&
-                window.chatbot.facialAnimation.audioManager.audioContext) {
+            // If we have access to the chatbot system, adjust the character position
+            if (window.chatbot && window.chatbot.facialAnimation) {
+                const facialSystem = window.chatbot.facialAnimation;
                 
-                const audioContext = window.chatbot.facialAnimation.audioManager.audioContext;
-                if (audioContext.state === 'suspended') {
-                    await audioContext.resume();
-                    console.log('ChatBot AudioContext resumed');
+                // Get character and room from facial system
+                const characterModel = facialSystem.characterModel;
+                const initialPositions = facialSystem.initialEyeAlignedPosition;
+                
+                if (characterModel) {
+                    // Detect if we're on mobile
+                    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                    
+                    // Position character at the eye-aligned position with minor adjustments for VR
+                    const characterYPosition = initialPositions?.character?.y || 0;
+                    
+                    // Set position with accurate eye-level alignment
+                    characterModel.position.set(
+                        0,                        // Centered horizontally
+                        characterYPosition,       // Use stored eye-aligned position
+                        -2                        // 2 meters away for conversation
+                    );
+                    
+                    // Reset rotation to face user directly
+                    characterModel.rotation.set(0, 0, 0);
+                    
+                    // Use local reference space for better positioning
+                    if (facialSystem.renderer && facialSystem.renderer.xr) {
+                        facialSystem.renderer.xr.setReferenceSpaceType('local');
+                        console.log('Set reference space type to "local" for better positioning');
+                    }
+                    
+                    console.log('Character positioned for VR conversation at eye level:', characterModel.position);
                 }
             }
-            
-            return true;
-        } catch (err) {
-            console.error('Error initializing audio system:', err);
-            return false;
-        }
-    };
-    
-    // Add user interaction handler to activate audio
-    document.body.addEventListener('click', async function() {
-        // Initialize audio on first interaction
-        await window.initAudio();
-        
-        // Try to get microphone permissions early
-        if (window.chatbot && !window.chatbot.microphonePermissionChecked) {
-            window.chatbot.microphonePermissionChecked = true;
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                // Stop the tracks immediately - we just want the permission
-                stream.getTracks().forEach(track => track.stop());
-                console.log('Microphone permission granted on page interaction');
-            } catch (err) {
-                console.error('Could not get microphone permission:', err);
-                // We'll handle this when the user tries to record
-            }
-        }
-    });
-
-    // Add click listener to all buttons to ensure audio is initialized
-    document.addEventListener('click', async function(event) {
-        if (event.target.tagName === 'BUTTON') {
-            await window.initAudio();
-        }
-    });
-
-    // Handle WebSocket connection errors gracefully
-    window.addEventListener('error', function(event) {
-        if (event.message && event.message.includes('WebSocket connection')) {
-            console.warn('WebSocket connection failed. The app will continue to function without live reloading.');
-        }
-    });
-    
-    // Fallback for WebSocket connection failures
-    const handleWebSocketFailure = () => {
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.hostname}:3001/`;
-        
-        try {
-            const ws = new WebSocket(wsUrl);
-            
-            ws.onerror = () => {
-                console.warn('WebSocket connection failed. Live reload disabled.');
-            };
-            
-            ws.onclose = () => {
-                // Try to reconnect after a delay
-                setTimeout(handleWebSocketFailure, 5000);
-            };
-        } catch (e) {
-            console.warn('WebSocket initialization failed:', e);
-        }
-    };
-    
-    // Initialize WebSocket connection handling
-    handleWebSocketFailure();
+        });
+    }
     
     // Initialize chatbot
     const chatbot = new ChatbotSystem();
     window.chatbot = chatbot; // Make it accessible for debugging
+    
+    // Ensure VR button is always on top and optimized for face-to-face conversation
+    setTimeout(() => {
+        const vrButton = document.getElementById('vr-button');
+        if (vrButton) {
+            // Make sure it's at the highest z-index
+            vrButton.style.zIndex = '999999';
+            
+            // Ensure it's directly attached to the body
+            if (vrButton.parentElement !== document.body) {
+                document.body.appendChild(vrButton);
+            }
+            
+            // Modify the VR button click handler to optimize for face-to-face conversation
+            const originalOnClick = vrButton.onclick;
+            vrButton.onclick = function(event) {
+                console.log('VR button clicked - preparing optimal eye-level positioning');
+                
+                // If we have access to the chatbot system, prepare it for VR
+                if (window.chatbot && window.chatbot.facialAnimation) {
+                    const facialSystem = window.chatbot.facialAnimation;
+                    
+                    // If we have the character model, position it for VR
+                    if (facialSystem.camera && facialSystem.characterModel) {
+                        // Get character model and initial aligned positions
+                        const characterModel = facialSystem.characterModel;
+                        const initialPositions = facialSystem.initialEyeAlignedPosition;
+                        
+                        if (characterModel && initialPositions) {
+                            // Detect if we're on mobile
+                            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                            
+                            // Use the original eye-aligned position from initialization
+                            const characterYPosition = initialPositions.character.y;
+                            
+                            console.log(`Using eye-aligned character position Y=${characterYPosition.toFixed(2)}`);
+                            
+                            // Position character to match eye level
+                            characterModel.position.set(
+                                0,                      // Centered horizontally
+                                characterYPosition,     // Eye-aligned position from initialization
+                                -2                      // 2 meters away for perfect conversation distance
+                            );
+                            
+                            // Reset rotation to face user directly
+                            characterModel.rotation.set(0, 0, 0);
+                            
+                            // Use local reference space for better positioning
+                            if (facialSystem.renderer && facialSystem.renderer.xr) {
+                                facialSystem.renderer.xr.setReferenceSpaceType('local');
+                                console.log('Set reference space type to "local" for consistent VR positioning');
+                            }
+                            
+                            console.log('Character positioned for VR at:', characterModel.position);
+                        } else {
+                            console.warn('Could not find initial eye-aligned positions');
+                        }
+                    }
+                }
+                
+                // Call the original click handler
+                if (originalOnClick) {
+                    originalOnClick.call(this, event);
+                }
+            };
+            
+            console.log('VR button configured for face-to-face conversational experience');
+        }
+    }, 1000); // Delay to ensure other elements are loaded
 }); 

@@ -2,119 +2,303 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Feature-Policy" content="xr-spatial-tracking *">
     <title>AI Therapist Chatbot</title>
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./src/styles.css">
     <link rel="icon" type="image/x-icon" href="data:,">
     <style>
-        #test-audio-button {
-            position: fixed;
-            top: 20px;
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            overflow: hidden;
+        }
+        
+        #chat-container {
+            position: absolute;
             right: 20px;
+            top: 20px;
+            width: 380px;
+            height: calc(100% - 40px);
+            background-color: rgba(50, 50, 50, 0.85);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+        }
+        
+        .chat-header {
+            margin-bottom: 20px;
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding-bottom: 15px;
+        }
+        
+        .chat-header h2 {
+            margin: 0;
+            font-size: 24px;
+            color: #ffffff;
+            font-weight: 400;
+            letter-spacing: 0.5px;
+        }
+        
+        #chat-interface {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+        
+        #chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 12px;
+            background-color: rgba(40, 40, 40, 0.6);
+        }
+        
+        #chat-input-area {
+            margin-bottom: 10px;
+        }
+        
+        /* Pre-create text input */
+        #text-input-alternative {
+            display: flex;
+            width: 100%;
+            border-radius: 12px;
+            padding: 8px;
+            background: rgba(40, 40, 40, 0.8);
+            margin-bottom: 15px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        
+        #text-input-field {
+            flex: 1;
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            margin-right: 8px;
+            font-size: 15px;
+            background: rgba(30, 30, 30, 0.8);
+            color: white;
+        }
+        
+        #text-input-button {
             padding: 10px 20px;
-            background: #ff5722;
+            border-radius: 8px;
+            background-color: #4CAF50;
             color: white;
             border: none;
-            border-radius: 5px;
             cursor: pointer;
-            z-index: 1000;
+            font-size: 16px;
             font-weight: bold;
+            min-width: 80px;
         }
+        
+        #recording-controls {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+        
+        #recordButton {
+            padding: 14px 20px;
+            border: none;
+            border-radius: 8px;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        #recordButton .record-icon {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background-color: #fff;
+            border-radius: 50%;
+        }
+        
+        #recording-status {
+            text-align: center;
+            padding: 5px 0;
+            font-size: 14px;
+        }
+        
         #volume-control {
+            display: none;
+        }
+        
+        /* Hide reset button completely */
+        .reset-button {
+            display: none !important;
+        }
+        
+        /* Make VR button more accessible */
+        #vr-button {
+            position: fixed !important;
+            bottom: 20px !important;
+            z-index: 1000 !important;
+        }
+        
+        /* Mobile adjustments */
+        @media (max-width: 768px) {
+            #chat-container {
+                width: 100%;
+                height: 60%;
+                top: auto;
+                bottom: 0;
+                right: 0;
+                left: 0;
+                padding: 15px;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-top-left-radius: 20px;
+                border-top-right-radius: 20px;
+            }
+            
+            .chat-header {
+                margin-bottom: 15px;
+                padding-bottom: 5px;
+            }
+            
+            .chat-header h2 {
+                font-size: 20px;
+            }
+            
+            #chat-messages {
+                max-height: calc(100% - 130px);
+                padding: 10px;
+            }
+            
+            #chat-input-area {
+                margin-bottom: 15px;
+            }
+            
+            #recordButton {
+                padding: 12px 15px;
+                font-size: 14px;
+            }
+            
+            .message {
+                max-width: 90%;
+                margin: 8px 0;
+                padding: 12px;
+            }
+            
+            #text-input-alternative {
+                margin-bottom: 10px;
+            }
+            
+            #text-input-field {
+                font-size: 14px;
+            }
+            
+            #text-input-button {
+                min-width: 70px;
+                padding: 10px 15px;
+            }
+        }
+        
+        /* Remove any potential scroll triggers */
+        html, body {
+            overflow: hidden;
             position: fixed;
-            top: 70px;
-            right: 20px;
-            width: 150px;
-            z-index: 1000;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
         }
     </style>
 </head>
 <body>
     <div id="container">
+        <div id="canvas-container"></div>
         <div id="chat-container">
-            <div id="animation-container"></div>
+            <div class="chat-header">
+                <h2>AI Assistant</h2>
+            </div>
             <div id="chat-interface">
                 <div id="chat-messages"></div>
                 <div id="chat-input-area">
-                    <button id="recordButton">
-                        <span class="record-icon"></span>
-                        Start Recording
-                    </button>
-                    <div id="recording-status">Click to start speaking</div>
+                    <!-- Pre-create the text input -->
+                    <div id="text-input-alternative">
+                        <input id="text-input-field" type="text" placeholder="Type your message here...">
+                        <button id="text-input-button">Send</button>
+                    </div>
+                    <div id="recording-controls">
+                        <button id="recordButton">
+                            <span class="record-icon"></span>
+                            Start Recording
+                        </button>
+                        <div id="recording-status">Click to start speaking</div>
+                    </div>
                 </div>
             </div>
         </div>
-        <audio id="audioInput" preload="auto" controls></audio>
+        <audio id="audioInput" preload="auto"></audio>
     </div>
     
-    <!-- Test audio button -->
-    <button id="test-audio-button">Test Audio</button>
     <input id="volume-control" type="range" min="0" max="1" step="0.1" value="1">
     
     <script type="module" src="./src/main.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Test audio button functionality
-            const testButton = document.getElementById('test-audio-button');
-            const volumeControl = document.getElementById('volume-control');
-            const audioElement = document.getElementById('audioInput');
+            // Set up the text input button
+            const textButton = document.getElementById('text-input-button');
+            const textField = document.getElementById('text-input-field');
             
-            // Create test audio - browser-generated tone
-            const testTone = function() {
-                // Try to resume AudioContext
-                if (window.chatbot && window.chatbot.facialAnimation && 
-                    window.chatbot.facialAnimation.audioManager) {
-                    window.chatbot.facialAnimation.audioManager.initialize();
-                }
+            if (textButton && textField) {
+                textButton.addEventListener('click', function() {
+                    if (window.chatbot) {
+                        const text = textField.value.trim();
+                        if (text) {
+                            window.chatbot.addMessageToChat('user', text);
+                            window.chatbot.generateResponse(text);
+                            textField.value = '';
+                        }
+                    }
+                });
                 
-                // Show audio controls for debugging
-                audioElement.controls = true;
+                textField.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        if (window.chatbot) {
+                            const text = textField.value.trim();
+                            if (text) {
+                                window.chatbot.addMessageToChat('user', text);
+                                window.chatbot.generateResponse(text);
+                                textField.value = '';
+                            }
+                        }
+                    }
+                });
                 
-                // Create a test audio file with a simple tone
-                try {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    const audioCtx = new AudioContext();
-                    const oscillator = audioCtx.createOscillator();
-                    const gainNode = audioCtx.createGain();
-                    
-                    // Configure oscillator
-                    oscillator.type = 'sine';
-                    oscillator.frequency.setValueAtTime(440, audioCtx.currentTime); // A4 note
-                    
-                    // Connect nodes
-                    oscillator.connect(gainNode);
-                    gainNode.connect(audioCtx.destination);
-                    
-                    // Start sound
-                    oscillator.start();
-                    
-                    // Stop after 1 second
-                    setTimeout(() => {
-                        oscillator.stop();
-                        console.log('Test tone completed');
-                    }, 1000);
-                    
-                    console.log('Playing test tone');
-                } catch (e) {
-                    console.error('Failed to play test tone:', e);
-                    
-                    // Fallback to a normal audio file
-                    const dummyAudio = new Audio();
-                    dummyAudio.src = 'data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABMSVNUHAAAAElORk9JQ09QHwAAAENvcHlyaWdodACsAAAA';
-                    dummyAudio.play();
-                }
-            };
-            
-            testButton.addEventListener('click', testTone);
+                // Focus on the text field
+                setTimeout(() => textField.focus(), 500);
+            }
             
             // Volume control
+            const volumeControl = document.getElementById('volume-control');
+            
             volumeControl.addEventListener('input', function() {
                 if (window.chatbot && window.chatbot.facialAnimation && 
                     window.chatbot.facialAnimation.audioManager) {
                     window.chatbot.facialAnimation.audioManager.setVolume(this.value);
                 }
-                // Also set the audio element volume as fallback
-                audioElement.volume = this.value;
             });
         });
     </script>

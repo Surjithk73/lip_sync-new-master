@@ -6,13 +6,12 @@
 }
 
 body {
-    font-family: Arial, sans-serif;
-    background-color: #1a1a1a;
-    color: #ffffff;
+    font-family: 'Arial', sans-serif;
+    margin: 0;
+    padding: 0;
+    color: #fff;
+    background-color: #000;
     overflow: hidden;
-    position: fixed;
-    width: 100%;
-    height: 100%;
 }
 
 #container {
@@ -20,13 +19,13 @@ body {
     height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 #animation-container {
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.2);
-    border-radius: 10px;
+    background-color: transparent;
     overflow: hidden;
     position: relative;
 }
@@ -42,31 +41,23 @@ body {
     position: fixed;
     top: 0;
     left: 0;
+    overflow: hidden;
 }
 
 .chat-section {
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(10px);
-    border-radius: 10px;
+    background: transparent;
+    backdrop-filter: blur(0);
     position: relative;
+    overflow: hidden;
 }
 
 #chat-messages {
-    position: absolute;
-    top: 20px;
-    left: 20px;
-    right: 20px;
-    bottom: 90px; /* Space for controls */
-    overflow-y: scroll;
-    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
     padding: 10px;
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 8px;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
 }
 
 .controls {
@@ -77,88 +68,168 @@ body {
     display: flex;
     gap: 10px;
     padding: 10px;
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 8px;
+    background: transparent;
     align-items: center;
 }
 
 .message {
+    padding: 12px 16px;
     margin: 8px 0;
-    padding: 12px;
-    border-radius: 8px;
+    border-radius: 10px;
     max-width: 80%;
     word-wrap: break-word;
+    line-height: 1.4;
+    position: relative;
 }
 
 .user-message {
-    background: rgba(86, 182, 94, 0.2);
+    background-color: #4CAF50;
+    align-self: flex-end;
     margin-left: auto;
-    color: #fff;
+    border-bottom-right-radius: 4px;
 }
 
 .ai-message {
-    background: rgba(255, 255, 255, 0.1);
+    background-color: #444;
+    align-self: flex-start;
     margin-right: auto;
-    color: #fff;
+    border-bottom-left-radius: 4px;
 }
 
 #recordButton {
-    padding: 12px 24px;
+    padding: 14px 20px;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     background: #4CAF50;
     color: white;
     cursor: pointer;
-    transition: background-color 0.3s;
-    flex: 1;
+    transition: all 0.2s ease;
+    font-weight: bold;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
 }
 
 #recordButton:hover {
     background: #45a049;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
 #recordButton.recording {
-    background: #f44336;
-}
-
-#recordButton.recording:hover {
-    background: #da190b;
-}
-
-#recording-status {
-    color: #fff;
-    font-size: 0.9em;
-    flex: 2;
-    text-align: center;
-}
-
-.loading-indicator {
-    color: #888;
-    font-size: 14px;
+    background-color: #f44336;
     animation: pulse 1.5s infinite;
 }
 
 @keyframes pulse {
-    0% { opacity: 0.6; }
-    50% { opacity: 1; }
-    100% { opacity: 0.6; }
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+#recording-status {
+    color: #ddd;
+}
+
+/* Style for text input alternative */
+#text-input-alternative {
+    display: flex;
+    width: 100%;
+    border-radius: 12px;
+    padding: 8px;
+    background: rgba(40, 40, 40, 0.8);
+    margin-bottom: 15px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+#text-input-field {
+    flex: 1;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    margin-right: 8px;
+    font-size: 15px;
+    background: rgba(30, 30, 30, 0.8);
+    color: white;
+    transition: all 0.2s ease;
+}
+
+#text-input-field::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+#text-input-field:focus {
+    outline: none;
+    border-color: #4CAF50;
+    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
+    background: rgba(35, 35, 35, 0.9);
+}
+
+#text-input-alternative button {
+    padding: 10px 20px;
+    border-radius: 8px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    transition: all 0.2s ease;
+    min-width: 80px;
+}
+
+#recording-controls {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
 }
 
 /* Scrollbar styling */
-.messages::-webkit-scrollbar {
+#chat-messages::-webkit-scrollbar {
     width: 8px;
 }
 
-.messages::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.1);
+#chat-messages::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2);
     border-radius: 4px;
 }
 
-.messages::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 4px;
-}
-
-.messages::-webkit-scrollbar-thumb:hover {
+#chat-messages::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+}
+
+#chat-messages::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+/* Recording indicator */
+.recording-indicator {
+    width: 12px;
+    height: 12px;
+    background-color: #f44336;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+    vertical-align: middle;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.recording-indicator.active {
+    opacity: 1;
+    animation: pulse 1.5s infinite;
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+    .message {
+        max-width: 90%;
+        margin: 6px 0;
+        padding: 10px 14px;
+    }
 } 

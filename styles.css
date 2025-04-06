@@ -172,4 +172,35 @@ button:hover {
 input[type="range"] {
     width: 200px;
     margin: 0 10px;
+}
+
+/* Add responsive styling for mobile devices */
+@media (max-width: 768px) {
+    #chat-container {
+        grid-template-columns: 1fr;
+        padding: 10px;
+    }
+    
+    #chat-interface {
+        margin-bottom: 150px; /* Increased space for the VR button */
+    }
+    
+    #chat-input-area {
+        margin-bottom: 150px; /* Additional space at the bottom on mobile */
+    }
+    
+    /* Hide test audio button on mobile for more space */
+    #test-audio-button {
+        display: none;
+    }
+    
+    /* Ensure send message UI doesn't overlap with VR button */
+    #text-input-alternative {
+        margin-bottom: 150px;
+    }
+}
+
+/* Hide reset button completely */
+.reset-button {
+    display: none !important;
 } 
