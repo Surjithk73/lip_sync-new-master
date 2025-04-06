@@ -1,26 +1,14 @@
-// Improved Service Worker for WebXR support with large file handling
-const CACHE_NAME = 'vr-lip-sync-cache-v3';
-const STATIC_CACHE = 'static-cache-v3';
-const DYNAMIC_CACHE = 'dynamic-cache-v3';
-
-// Core app shell files that must be cached for offline use
-const coreAppFiles = [
+// Minimal Service Worker for WebXR support
+const CACHE_NAME = 'vr-lip-sync-cache-v2';
+const urlsToCache = [
   '/',
   '/index.html',
-  '/src/styles.css'
-];
-
-// Files that should be cached but aren't critical
-const secondaryFiles = [
+  '/src/main.js',
+  '/src/modelLoader.js',
   '/src/vr-initializer.js',
-  '/src/modelLoader.js'
-];
-
-// Large files that should be handled separately (network-first approach)
-const largeFiles = [
+  '/styles.css',
   '/assets/models/model_full.glb',
-  '/assets/models/room.glb',
-  '/assets/main-'  // Partial match for dynamically named chunks
+  '/assets/models/room.glb'
 ];
 
 // WebXR required headers
@@ -29,11 +17,6 @@ const xrHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp'
 };
-
-// Check if a URL matches any of the large files patterns
-function isLargeFile(url) {
-  return largeFiles.some(pattern => url.includes(pattern));
-}
 
 // Install event - cache basic files
 self.addEventListener('install', (event) => {
@@ -44,16 +27,9 @@ self.addEventListener('install', (event) => {
   
   // Cache core files
   event.waitUntil(
-    caches.open(STATIC_CACHE).then((cache) => {
+    caches.open(CACHE_NAME).then((cache) => {
       console.log('[ServiceWorker] Caching app shell');
-      return cache.addAll(coreAppFiles);
-    })
-    .then(() => {
-      // Cache secondary files in a separate operation to prevent blocking install
-      return caches.open(STATIC_CACHE).then((cache) => {
-        console.log('[ServiceWorker] Caching secondary files');
-        return cache.addAll(secondaryFiles);
-      });
+      return cache.addAll(urlsToCache);
     })
   );
 });
@@ -62,15 +38,12 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   console.log('[ServiceWorker] Activating');
   
-  // List of cache names to keep
-  const cacheAllowlist = [STATIC_CACHE, DYNAMIC_CACHE];
-  
   event.waitUntil(
     // Remove old caches
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.filter((cacheName) => {
-          return !cacheAllowlist.includes(cacheName);
+          return cacheName !== CACHE_NAME;
         }).map((cacheName) => {
           console.log('[ServiceWorker] Removing old cache', cacheName);
           return caches.delete(cacheName);
@@ -83,102 +56,36 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Improved fetch handler with different strategies based on resource type
+// Simplified fetch handler with minimal processing
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  
   // Don't handle non-GET requests
   if (event.request.method !== 'GET') return;
   
-  // Don't intercept Chrome extensions or other origins
-  if (url.origin !== location.origin && !url.hostname.endsWith('.buildship.com')) {
-    return;
-  }
-  
-  // For navigation requests, use a cache-first approach
+  // For navigation requests, serve the cached index.html if offline
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.match('/index.html')
-        .then(cachedResponse => {
-          if (cachedResponse) {
-            // Return cached version immediately
-            // But also fetch a fresh copy in the background
-            fetch(event.request)
-              .then(response => {
-                if (response && response.status === 200) {
-                  caches.open(STATIC_CACHE).then(cache => {
-                    cache.put('/index.html', response);
-                  });
-                }
-              })
-              .catch(() => {/* Ignore fetch errors */});
-              
-            return cachedResponse;
-          }
-          return fetch(event.request);
-        })
-        .catch(() => {
-          // If both cache and network fail, return a simple offline page
-          return new Response('You are offline. Please check your internet connection.', {
-            headers: { 'Content-Type': 'text/html' }
-          });
-        })
-    );
-    return;
-  }
-  
-  // For large files (like models and main JS bundle), use a network-first approach
-  if (isLargeFile(event.request.url)) {
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          // Clone the response for caching
-          const responseToCache = response.clone();
-          
-          // Cache the response with retry logic
-          caches.open(DYNAMIC_CACHE)
-            .then(cache => cache.put(event.request, responseToCache))
-            .catch(err => console.error('Error caching large file:', err));
-            
-          return response;
-        })
-        .catch(() => {
-          // If network fails, try from cache
-          return caches.match(event.request);
-        })
-    );
-    return;
-  }
-  
-  // For all other requests (scripts, styles, etc.), use a cache-first approach
-  event.respondWith(
-    caches.match(event.request)
-      .then(cachedResponse => {
-        if (cachedResponse) {
-          // Return cached version
-          return cachedResponse;
-        }
-        
-        // If not in cache, fetch from network
-        return fetch(event.request)
-          .then(response => {
-            // Only cache successful responses
-            if (response && response.status === 200) {
-              const responseToCache = response.clone();
-              caches.open(DYNAMIC_CACHE)
-                .then(cache => cache.put(event.request, responseToCache))
-                .catch(err => console.warn('Error caching resource:', err));
-            }
-            return response;
-          });
+      fetch(event.request).catch(() => {
+        return caches.match('/index.html');
       })
-      .catch(err => {
-        console.warn('Fetch handler failed:', err);
-        // Return a fallback response for images if needed
-        if (event.request.url.match(/\.(jpg|jpeg|png|gif|svg)$/)) {
-          return new Response('', { status: 404 });
+    );
+    return;
+  }
+  
+  // For all other requests, try network first with cache fallback
+  event.respondWith(
+    fetch(event.request)
+      .then(response => {
+        // Only cache successful responses
+        if (response && response.status === 200) {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME).then(cache => {
+            cache.put(event.request, responseToCache);
+          });
         }
-        throw err;
+        return response;
+      })
+      .catch(() => {
+        return caches.match(event.request);
       })
   );
 });
@@ -197,7 +104,5 @@ self.addEventListener('message', (event) => {
         });
       });
     });
-  } else if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
   }
 }); 

@@ -13,7 +13,7 @@ export default defineConfig({
             registerType: 'autoUpdate',
             workbox: {
                 globPatterns: ['**/*.{js,css,html,ico,png,svg,json,vue,txt,woff2}'],
-                maximumFileSizeToCacheInBytes: 3 * 1024 * 1024 // 3 MB limit
+                maximumFileSizeToCacheInBytes: 3 * 1024 * 1024, // 3 MiB
             },
             includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
             manifest: {
@@ -71,21 +71,30 @@ export default defineConfig({
         outDir: 'dist',
         assetsDir: 'assets',
         sourcemap: true,
-        chunkSizeWarningLimit: 2200, // Increased warning limit for chunks
+        chunkSizeWarningLimit: 2200, // Increased from default 500 to handle larger bundles
         rollupOptions: {
             input: {
                 main: path.resolve(__dirname, 'index.html')
             },
             output: {
-                manualChunks: {
-                    vendor: ['react', 'react-dom'],
-                    three: ['three', 'three/examples/jsm/loaders/GLTFLoader', 'three/examples/jsm/controls/OrbitControls'],
-                    tone: ['tone'],
-                    services: [
-                        './src/services/elevenLabsService',
-                        './src/services/phonemeLipSyncService',
-                        './src/services/audioManager'
-                    ]
+                manualChunks: (id) => {
+                    // Create specific chunks for large dependencies
+                    if (id.includes('node_modules/three')) {
+                        return 'three';
+                    }
+                    if (id.includes('node_modules/tone')) {
+                        return 'tone';
+                    }
+                    if (id.includes('node_modules/@google')) {
+                        return 'google-ai';
+                    }
+                    if (id.includes('node_modules/react') || 
+                        id.includes('node_modules/react-dom')) {
+                        return 'vendor-react';
+                    }
+                    if (id.includes('node_modules')) {
+                        return 'vendor';
+                    }
                 }
             }
         }
