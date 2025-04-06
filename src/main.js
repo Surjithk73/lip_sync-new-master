@@ -1489,8 +1489,8 @@ class FacialAnimationSystem {
                     await this.renderer.xr.setSession(session);
                     
                     // Position camera for VR to face the front of the character
-                    // Assuming the character model is at the origin facing -Z direction
-                    this.camera.position.set(0, 1.6, 3.0); // Move camera in front of the character
+                    // Place camera directly in front of character
+                    this.camera.position.set(0, 1.6, 4.0); // Move camera further in front
                     this.camera.lookAt(0, 1.6, 0);
                     
                     // Ensure the character is oriented to face the VR camera
@@ -1498,21 +1498,6 @@ class FacialAnimationSystem {
                     
                     // Add VR interaction elements (recording button and crosshair)
                     this.addVRInteractionElements(this.modelLoader.model);
-                    
-                    // Add a one-time listener for the first XR frame to ensure correct positioning
-                    const onFirstXRFrame = () => {
-                        // Force the VR camera to be in front of the character
-                        const xrCamera = this.renderer.xr.getCamera();
-                        // Set the camera's world position
-                        xrCamera.position.set(0, 1.6, 3.0);
-                        xrCamera.lookAt(0, 1.6, 0);
-                        
-                        // Remove the one-time listener
-                        this.renderer.xr.getSession().removeEventListener('inputsourceschange', onFirstXRFrame);
-                        console.log('VR camera positioned to face the character front');
-                    };
-                    
-                    session.addEventListener('inputsourceschange', onFirstXRFrame);
                     
                     button.textContent = 'EXIT VR';
                     
@@ -1572,6 +1557,21 @@ class FacialAnimationSystem {
                             lastTapTime = currentTime;
                         }
                     });
+                    
+                    // Add a one-time listener for the first XR frame to ensure correct positioning
+                    const onFirstXRFrame = () => {
+                        // Force the VR camera to be in front of the character
+                        const xrCamera = this.renderer.xr.getCamera();
+                        // Position the camera in front of the character
+                        xrCamera.position.set(0, 1.6, 4.0); // Further in front for better view
+                        xrCamera.lookAt(0, 1.6, 0);
+                        
+                        // Remove the one-time listener
+                        this.renderer.xr.getSession().removeEventListener('inputsourceschange', onFirstXRFrame);
+                        console.log('VR camera positioned to face the character front');
+                    };
+                    
+                    session.addEventListener('inputsourceschange', onFirstXRFrame);
                     
                 } catch (error) {
                     console.error('VR initialization error:', error);
@@ -2303,11 +2303,13 @@ class FacialAnimationSystem {
             }
             
             // Make sure the character is facing the camera in VR
-            // The model likely faces +Z, but in our VR setup we want it to face -Z (toward the camera)
-            characterModel.rotation.y = Math.PI; // Rotate 180 degrees
+            // Rotate 180 degrees to face the user
+            characterModel.rotation.set(0, Math.PI, 0); // Force exact rotation to face user
             
-            // Optionally adjust position if needed (depends on model orientation)
-            // characterModel.position.z = 0; // Center model at z=0 for better VR positioning
+            // Also adjust position slightly if needed to center in view
+            if (characterModel.position.z !== 0) {
+                characterModel.position.z = 0; // Center at origin for better visibility
+            }
             
             console.log('Character oriented to face VR camera');
             
